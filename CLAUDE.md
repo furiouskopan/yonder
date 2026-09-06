@@ -84,6 +84,11 @@ The client holds ~320k targets in memory and re-renders once a second. Keep thes
   into existing buffers.
 - Avoid `Intl.NumberFormat` construction in render paths; the formatters in `lib/units.ts` are
   cached.
+- Do not add formatted strings to the 300k static targets (notes, Wikipedia hints, fact lists).
+  Store numbers or reuse shared strings, and derive display text on demand in `lib/target.ts`
+  (`noteOf`) or `describeQuery`.
+- Name order is origin-independent; sort it from `useEarthTargets().all`, not from the
+  distance-ordered list, so moving the pin does not re-sort 320k strings.
 
 ## External services and etiquette
 

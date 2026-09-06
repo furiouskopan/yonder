@@ -4,7 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="How far is everything from here: live distances to cities, landmarks, aircraft, satellites, planets, probes and stars." />
     <title>Yonder</title>
+    <script>
+      // Apply the saved theme before the app renders so there is no flash of the wrong colours.
+      try {
+        var prefs = JSON.parse(localStorage.getItem("yonder:prefs") || "{}");
+        var url = new URLSearchParams(location.search).get("theme");
+        var theme = url === "light" || url === "dark" ? url : prefs.theme;
+        if (theme !== "light" && theme !== "dark") theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        document.documentElement.dataset.theme = theme;
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

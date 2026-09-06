@@ -4,6 +4,7 @@ import { chordKm } from "../lib/geo";
 import { KM_PER_LY, MI_PER_KM, formatDistance, formatKm, formatLightTime, formatRate, type Unit } from "../lib/units";
 import type { SkyFn } from "../lib/sky";
 import type { DescriptionState } from "../hooks/useDescription";
+import { noteOf } from "../lib/target";
 import { directionOf } from "./DistanceTable";
 
 interface Props {
@@ -40,7 +41,8 @@ export default function DetailPanel({ target: t, origin, unit, sky, description,
   if (t.heightKm !== undefined && t.category === "satellite") facts.push(["Height", `${nf0.format(Math.round(t.heightKm))} km`]);
   if (t.ra !== undefined && t.dec !== undefined) facts.push(["RA / Dec (J2000)", `${(t.ra / 15).toFixed(2)} h, ${t.dec.toFixed(2)}°`]);
   if (t.facts) facts.push(...t.facts);
-  if (t.note && !t.facts?.some(([, v]) => v === t.note)) facts.push(["Notes", t.note]);
+  const note = noteOf(t);
+  if (note && !t.facts?.some(([, v]) => v === note)) facts.push(["Notes", note]);
 
   const desc = description.id === t.id ? description : null;
   const wikiLang = desc?.data?.lang && desc.data.lang !== "en" ? ` (${desc.data.lang.toUpperCase()} Wikipedia)` : "";

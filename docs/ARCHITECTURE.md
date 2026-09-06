@@ -43,8 +43,16 @@ Targets fall into three tiers by how often they change:
 | Earth static | cities, capitals, towns, airports, landmarks, POIs, custom places, computed points | origin moves, a dataset or the POI/custom list changes |
 | Dynamic | Sun/Moon/planets, Horizons bodies, satellites, aircraft | every second (`useClock`) |
 
-The static tiers are each sorted by distance once; the dynamic tier is small and sorted per tick.
-`App.tsx` merges the three sorted lists for the table rather than sorting everything each second.
+The static tiers are sorted once per origin/filter/sort change; the dynamic tier is small and
+sorted per tick. `App.tsx` never materialises the union: `lib/merge.ts` records where each dynamic
+row falls inside the static list and answers `rows.at(i)` with two binary searches, so the
+once-a-second work is proportional to the dynamic tier only.
+
+Static Earth targets are shared objects. `useStaticData` creates them once; `useEarthTargets`
+writes `distanceKm` into them in place when the origin moves and returns a new array of the same
+objects sorted nearest-first (a packed numeric sort over a `Float64Array`, not a comparator sort
+over objects). Name order does not depend on the origin and is cached separately. Nothing else
+may mutate a `Target`.
 
 ## Client data flow
 
@@ -53,15 +61,20 @@ The static tiers are each sorted by distance once; the dynamic tier is small and
 2. **Preferences.** `usePrefs` holds origin, units, category filters, satellite set, map mode,
    basemap. Persisted to `localStorage`, overridable by URL parameters.
 3. **Static datasets.** `useStaticData` fetches `public/data/*.json` (cities and countries first,
-   then towns, airports, exoplanets, stars as they arrive) and converts positional rows into
-   objects. Search keys are normalised here, once.
+   then towns, airports, exoplanets, stars as they arrive) and converts positional rows straight
+   into `Target`s in 12k-row slices between frames, so the page stays responsive while 300k rows
+   are processed. Search keys are normalised here, once. Places store a numeric population and no
+   Wikipedia hint; `lib/target.ts` (`noteOf`) and `describeQuery` derive the display strings on
+   demand instead of holding 600k formatted strings in memory. The same objects double as the
+   origin-search index (`App.searchIndex` is an array of references, not copies).
 4. **Earth targets.** `useEarthTargets` assigns each Earth place its great-circle distance from
-   the origin and sorts nearest-first. The hand-curated `LANDMARKS`, the Overpass POIs around the
-   origin (`usePoi`, debounced, re-fetched when the origin moves ~2 km) and the user's custom
-   places join the same list, plus three computed points (antipode, centre of the Earth,
-   Kármán line).
-5. **Fixed targets.** `lib/stars.ts` builds the star, exoplanet and deep-sky targets. Curated
-   deep-sky entries take precedence over HYG catalog stars with the same name.
+   the origin in place and returns them sorted nearest-first. The hand-curated `LANDMARKS`, the
+   Overpass POIs around the origin (`usePoi`, debounced, re-fetched when the origin moves ~2 km)
+   and the user's custom places join the same list, plus three computed points (antipode, centre
+   of the Earth, Kármán line).
+5. **Fixed targets.** `lib/stars.ts` builds the star, exoplanet and deep-sky targets straight from
+   the positional rows. Curated deep-sky entries take precedence over HYG catalog stars with the
+   same name.
 6. **Solar System.** `useSpaceTargets` computes Sun, Moon and planets locally with
    `astronomy-engine` and interpolates every Horizons body (probes, moons, dwarf planets,
    asteroids, comets, this month's near-Earth flybys) from its 48-hour vector table using cubic
@@ -70,31 +83,51 @@ The static tiers are each sorted by distance once; the dynamic tier is small and
 7. **Satellites.** `useSatellites` fetches a TLE set from the server, posts it to
    `sat.worker.ts`, and every tick asks the worker to propagate all of them. The worker returns a
    `Float32Array` of seven values per satellite (range, az, el, sub-lat, sub-lon, height, speed);
-   the hook turns finite rows into `Target`s. Ground tracks for the selected satellite are also
-   computed by the worker on demand.
+   the hook spreads the numbers over a per-satellite base object (name, class, SATCAT facts) that
+   was built once when the set loaded. Ground tracks for the selected satellite are also computed
+   by the worker on demand.
 8. **Aircraft.** `useAircraft` polls `/api/aircraft` every 10 s and dead-reckons each aircraft
    forward from its last report using ground speed, track and vertical rate.
-9. **Filter and merge.** A `pass(t)` predicate (category toggles plus the free-text filter over
-   `Target.key`) is applied to each tier. The tiers are merged by the active sort into the row
-   list for the table. Separately, the map and globe get up to 1,200 nearby Earth rows (capped at
-   400 cities/towns/airports so landmarks stay visible), all visible satellites and all aircraft.
+9. **Filter and merge.** The category toggles plus the free-text filter (deferred with
+   `useDeferredValue`, matched against `Target.key`) are applied to each tier; when every category
+   is on and the text is empty the original arrays are passed through untouched. The static tier is
+   sorted for the active sort (a merge of the two distance-ordered lists, or a cached key sort for
+   the name column), the dynamic tier is sorted per tick, and `mergeRows` exposes the union to the
+   table as a `RowSource`. Separately, the map and globe get up to 1,200 nearby Earth rows straight
+   from the distance-ordered Earth list (capped at 400 cities/towns/airports so landmarks stay
+   visible), the visible satellites (the 2D map draws at most 800) and all aircraft.
 10. **Selection and hover.** `selectedId` and `hoverId` live in `App` and are shared by the table,
     map, globe and Solar System view, so hovering a marker highlights the row and vice versa.
     `useDescription` fetches the Wikipedia summary for the selected target through the server.
 
 ## Views
 
-- **DistanceTable** — virtualised list with fixed 44 px rows; only the rows in the viewport
-  (plus overscan) are mounted. Row is `memo`ised.
-- **MapView** — Leaflet. Creates the map once; later effects diff marker sets by id so satellite
-  and aircraft markers are moved, not recreated. Popups fetch a Wikipedia blurb lazily.
+- **DistanceTable** — virtualised list with fixed 44 px rows over a `RowSource`; only the rows in
+  the viewport (plus overscan) are mounted. Row is `memo`ised and receives the per-second sky
+  function only when it needs it (stars, exoplanets), so Earth rows do not re-render every tick.
+  Rows are keyboard-focusable; Enter or Space selects.
+- **MapView** — Leaflet with the canvas renderer (all circle markers on one canvas). Creates the
+  map once; later effects diff marker sets by id so satellite and aircraft markers are moved, not
+  recreated, and restyled only when they cross the horizon. Tooltips are functions evaluated when
+  shown, reading the latest target from a per-id map. Popups fetch a Wikipedia blurb lazily.
 - **GlobeView** — globe.gl (three.js). Satellites, Earth places and aircraft are three
-  `THREE.Points` layers whose position/colour buffers are rewritten each tick. Picking uses a
-  raycaster against those layers. Lazy-loaded; only mounted in 3D mode.
+  `THREE.Points` layers whose position/colour buffers are rewritten in place each tick. Picking
+  uses a raycaster against those layers. Rendering pauses while the tab is hidden. Lazy-loaded;
+  only mounted in 3D mode.
 - **SolarSystem3D** — plain three.js with OrbitControls and CSS2D labels. Planets are meshes,
-  everything else is one `Points` cloud. Orbit shapes come from `/api/orbits`: conic paths from
-  osculating elements for small bodies, sampled trajectories for spacecraft, and locally
-  sampled orbits for the planets. Two scales: logarithmic (default) and linear.
+  everything else is one `Points` cloud. The scene is (re)built only when the set of bodies, the
+  orbit data or the scale changes; the per-second update writes positions into the existing
+  meshes and buffers through per-body handles. Orbit shapes come from `/api/orbits`: conic paths
+  from osculating elements for small bodies, sampled trajectories for spacecraft, and locally
+  sampled orbits for the planets (resampled hourly). Two scales: logarithmic (default) and linear.
+
+## Preferences and theme
+
+`usePrefs` persists origin, units, category toggles, satellite set, map mode, basemap and theme
+(`auto` | `light` | `dark`) in `localStorage`. `index.html` applies the saved theme to
+`<html data-theme>` before the bundle loads so there is no flash; `App.useTheme` keeps it in sync
+with the system setting while on `auto`. The clock can be paused from the toolbar, which freezes
+every per-second computation.
 
 ## Server
 
@@ -127,6 +160,21 @@ is zero.
   uses for its equatorial J2000 frame; the observer vector is subtracted to get topocentric range
   and look angles. Heliocentric positions for the 3D view are rotated to ecliptic J2000 (AU).
 - Fixed stars: RA/Dec J2000 to alt/az through `makeSky` (rotation matrix built once per tick).
+
+## Performance baseline
+
+Measured in headless Chromium (Playwright, software GL) on the default satellite set, 2D map,
+after all datasets loaded, 15 s steady state:
+
+| | before | after |
+| --- | --- | --- |
+| JS heap used | 259 MB | 95 MB |
+| Main-thread script time | 538 ms per second | 17 ms per second |
+| Long tasks (>50 ms) in 15 s | 49 | 1 |
+| Blocking time while datasets load | 5.2 s (worst 818 ms) | 0.8 s (worst 213 ms) |
+
+With every active satellite (~16k) and the 3D globe the new build spends ~150 ms of script per
+second, most of it building the per-tick satellite targets and rewriting the globe buffers.
 
 ## Data build
 

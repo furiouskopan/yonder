@@ -20,6 +20,8 @@ export interface PoiState {
   radiusKm?: number;
 }
 
+const EMPTY: PoiRow[] = [];
+
 /** OpenStreetMap places of interest around the origin. Fetched (debounced) whenever the origin moves. */
 export function usePoi(origin: Origin, enabled: boolean): { pois: PoiRow[]; state: PoiState } {
   const [pois, setPois] = useState<PoiRow[]>([]);
@@ -52,5 +54,5 @@ export function usePoi(origin: Origin, enabled: boolean): { pois: PoiRow[]; stat
     };
   }, [lat, lon, enabled]);
 
-  return { pois: enabled ? pois : [], state };
+  return { pois: enabled ? pois : EMPTY, state };
 }

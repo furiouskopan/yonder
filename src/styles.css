@@ -1,5 +1,5 @@
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --bg: #f4f5f8;
   --panel: #ffffff;
   --panel-2: #f8f9fb;
@@ -16,21 +16,31 @@
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0b0f17;
-    --panel: #121826;
-    --panel-2: #0f1522;
-    --fg: #e5e7eb;
-    --muted: #9ca3af;
-    --border: #232b3b;
-    --row-hover: #1a2233;
-    --row-selected: #2b2412;
-    --up: #4ade80;
-    --down: #6b7280;
-    --closer: #4ade80;
-    --farther: #fbbf24;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+/* The theme attribute is set before first paint by index.html and kept current by App.tsx. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0b0f17;
+  --panel: #121826;
+  --panel-2: #0f1522;
+  --fg: #e5e7eb;
+  --muted: #9ca3af;
+  --border: #232b3b;
+  --row-hover: #1a2233;
+  --row-selected: #2b2412;
+  --up: #4ade80;
+  --down: #6b7280;
+  --closer: #4ade80;
+  --farther: #fbbf24;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
@@ -85,10 +95,84 @@ select {
   padding: 5px 8px;
 }
 
-input:focus,
-select:focus {
+input:focus-visible,
+select:focus-visible,
+button:focus-visible,
+.row:focus-visible,
+summary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+.row:focus {
+  outline: none;
+}
+
+.row:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Thin indeterminate bar along the top while the offline datasets are still arriving. */
+.progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  z-index: 7000;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent 0%, var(--accent) 50%, transparent 100%);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: progress-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes progress-slide {
+  from {
+    background-position: -40% 0;
+  }
+  to {
+    background-position: 140% 0;
+  }
+}
+
+/* Live / paused toggle */
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.live .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.live.on {
+  color: var(--fg);
+  border-color: var(--up);
+  background: color-mix(in srgb, var(--up) 12%, var(--panel));
+}
+
+.live.on .dot {
+  background: var(--up);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--up) 60%, transparent);
+  animation: live-pulse 2s ease-out infinite;
+}
+
+@keyframes live-pulse {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--up) 60%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 6px transparent;
+  }
 }
 
 a {
@@ -555,8 +639,22 @@ a {
   cursor: pointer;
 }
 
+.thead .th:hover {
+  color: var(--fg);
+}
+
 .thead .th.active {
   color: var(--fg);
+}
+
+.thead .th .sort-mark {
+  margin-left: 4px;
+  font-size: 10px;
+  opacity: 0.45;
+}
+
+.thead .th.active .sort-mark {
+  opacity: 1;
 }
 
 .tbody {
@@ -785,8 +883,12 @@ a {
 }
 
 .leaflet-container {
-  background: #0f172a;
+  background: var(--panel-2);
   font: inherit;
+}
+
+:root[data-theme="dark"] .leaflet-container {
+  background: #0f172a;
 }
 
 .leaflet-control-layers,

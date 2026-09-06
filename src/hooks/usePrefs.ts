@@ -3,8 +3,11 @@ import type { Category, Origin } from "../types";
 import { CATEGORIES } from "../types";
 import type { Unit } from "../lib/units";
 
+export type ThemePref = "auto" | "light" | "dark";
+
 export interface Prefs {
   origin: Origin;
+  theme: ThemePref;
   unit: Unit;
   cats: Record<Category, boolean>;
   satSet: string;
@@ -21,6 +24,7 @@ export const ALL_ON = Object.fromEntries(CATEGORIES.map((c) => [c.id, true])) as
 
 const DEFAULTS: Prefs = {
   origin: DEFAULT_ORIGIN,
+  theme: "auto",
   unit: "auto",
   cats: ALL_ON,
   satSet: "curated",
@@ -29,7 +33,7 @@ const DEFAULTS: Prefs = {
   basemap: "auto",
 };
 
-/** Optional URL parameters: ?lat=&lon=&name=  ?map=2d|3d  ?only=<category>  ?sats=<set> */
+/** Optional URL parameters: ?lat=&lon=&name=  ?map=2d|3d  ?only=<category>  ?sats=<set>  ?theme=light|dark */
 function fromUrl(): Partial<Prefs> {
   const p = new URLSearchParams(window.location.search);
   const out: Partial<Prefs> = {};
@@ -44,6 +48,8 @@ function fromUrl(): Partial<Prefs> {
   if (only && CATEGORIES.some((c) => c.id === only)) out.cats = Object.fromEntries(CATEGORIES.map((c) => [c.id, c.id === only])) as Record<Category, boolean>;
   const sats = p.get("sats");
   if (sats) out.satSet = sats;
+  const theme = p.get("theme");
+  if (theme === "light" || theme === "dark") out.theme = theme;
   return out;
 }
 
@@ -68,6 +74,6 @@ export function usePrefs() {
       /* storage unavailable */
     }
   }, [prefs]);
-  const update = useCallback((patch: Partial<Prefs>) => setPrefs((p) => ({ ...p, ...patch })), []);
+  const update = useCallback((patch: Partial<Prefs> | ((p: Prefs) => Partial<Prefs>)) => setPrefs((p) => ({ ...p, ...(typeof patch === "function" ? patch(p) : patch) })), []);
   return [prefs, update] as const;
 }

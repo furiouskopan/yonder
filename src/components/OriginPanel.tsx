@@ -1,14 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
-import type { Origin } from "../types";
+import { memo, useEffect, useMemo, useState } from "react";
+import type { Origin, Target } from "../types";
 import { norm } from "../lib/search";
 
-export interface SearchEntry {
-  name: string;
-  sub: string;
-  lat: number;
-  lon: number;
-  key: string;
-}
+/** Anything with a name, a position and a search key can be an origin suggestion; Targets qualify directly. */
+export type SearchEntry = Pick<Target, "name" | "subtitle" | "note" | "category" | "lat" | "lon" | "key">;
 
 interface Props {
   origin: Origin;
@@ -18,7 +13,13 @@ interface Props {
   onPinToggle: (v: boolean) => void;
 }
 
-export default function OriginPanel({ origin, index, onChange, pinOnClick, onPinToggle }: Props) {
+/** Secondary line for a suggestion: the country for places, the town for airports. */
+function subOf(e: SearchEntry): string {
+  if (e.category === "airport" && e.note) return e.note.split(" · ")[0];
+  return (e.subtitle ?? "").replace(/^Capital of /, "");
+}
+
+export default memo(function OriginPanel({ origin, index, onChange, pinOnClick, onPinToggle }: Props) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
@@ -37,10 +38,11 @@ export default function OriginPanel({ origin, index, onChange, pinOnClick, onPin
     const starts: SearchEntry[] = [];
     const contains: SearchEntry[] = [];
     for (const e of index) {
-      if (e.key.startsWith(s)) {
+      const key = e.key ?? "";
+      if (key.startsWith(s)) {
         starts.push(e);
         if (starts.length >= 8) break;
-      } else if (contains.length < 8 && e.key.includes(s)) {
+      } else if (contains.length < 8 && key.includes(s)) {
         contains.push(e);
       }
     }
@@ -48,7 +50,9 @@ export default function OriginPanel({ origin, index, onChange, pinOnClick, onPin
   }, [q, index]);
 
   const pick = (e: SearchEntry) => {
-    onChange(e.lat, e.lon, `${e.name}, ${e.sub}`);
+    if (e.lat === undefined || e.lon === undefined) return;
+    const sub = subOf(e);
+    onChange(e.lat, e.lon, sub ? `${e.name}, ${sub}` : e.name);
     setQ("");
     setOpen(false);
   };
@@ -88,6 +92,11 @@ export default function OriginPanel({ origin, index, onChange, pinOnClick, onPin
         <input
           type="search"
           placeholder="Search a city, landmark or place…"
+          aria-label="Search for an origin"
+          role="combobox"
+          aria-expanded={open && results.length > 0}
+          aria-controls="origin-suggestions"
+          aria-autocomplete="list"
           value={q}
           onChange={(e) => {
             setQ(e.target.value);
@@ -111,16 +120,11 @@ export default function OriginPanel({ origin, index, onChange, pinOnClick, onPin
           }}
         />
         {open && results.length > 0 && (
-          <ul className="suggest" role="listbox">
+          <ul className="suggest" role="listbox" id="origin-suggestions">
             {results.map((r, i) => (
-              <li
-                key={`${r.name}-${r.lat}-${r.lon}`}
-                className={i === hi ? "active" : ""}
-                onMouseDown={() => pick(r)}
-                onMouseEnter={() => setHi(i)}
-              >
+              <li key={`${r.name}-${r.lat}-${r.lon}`} role="option" aria-selected={i === hi} className={i === hi ? "active" : ""} onMouseDown={() => pick(r)} onMouseEnter={() => setHi(i)}>
                 <span>{r.name}</span>
-                <span className="muted">{r.sub}</span>
+                <span className="muted">{subOf(r)}</span>
               </li>
             ))}
           </ul>
@@ -142,4 +146,4 @@ export default function OriginPanel({ origin, index, onChange, pinOnClick, onPin
       {geoMsg && <span className="muted">{geoMsg}</span>}
     </div>
   );
-}
+});

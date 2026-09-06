@@ -1,8 +1,9 @@
-import type { MouseEvent } from "react";
+import { memo, type MouseEvent } from "react";
 import type { Category } from "../types";
 import { CATEGORIES } from "../types";
 import { UNITS, type Unit } from "../lib/units";
 import type { SatSetInfo, SatState } from "../hooks/useSatellites";
+import type { ThemePref } from "../hooks/usePrefs";
 
 interface Props {
   cats: Record<Category, boolean>;
@@ -21,6 +22,10 @@ interface Props {
   shown: number;
   total: number;
   loading: string[];
+  live: boolean;
+  onLive: (v: boolean) => void;
+  theme: ThemePref;
+  onTheme: (t: ThemePref) => void;
 }
 
 function age(ms: number | undefined): string {
@@ -30,7 +35,7 @@ function age(ms: number | undefined): string {
   return `${h.toFixed(h < 10 ? 1 : 0)} h old`;
 }
 
-export default function Filters(p: Props) {
+export default memo(function Filters(p: Props) {
   const allOn = CATEGORIES.every((c) => p.cats[c.id]);
   const sat = p.satState;
   const satText =
@@ -48,7 +53,7 @@ export default function Filters(p: Props) {
 
   return (
     <div className="filters">
-      <div className="chips">
+      <div className="chips" role="group" aria-label="Categories">
         <button type="button" className={`chip all${allOn ? " on" : ""}`} onClick={p.onAll} title="Show every category">
           All
         </button>
@@ -69,7 +74,7 @@ export default function Filters(p: Props) {
         ))}
       </div>
       <div className="controls">
-        <input type="search" className="search" placeholder="Filter results…" value={p.search} onChange={(e) => p.onSearch(e.target.value)} />
+        <input type="search" className="search" placeholder="Filter results…" aria-label="Filter results" value={p.search} onChange={(e) => p.onSearch(e.target.value)} />
         <label>
           Units
           <select value={p.unit} onChange={(e) => p.onUnit(e.target.value as Unit)}>
@@ -91,6 +96,24 @@ export default function Filters(p: Props) {
             ))}
           </select>
         </label>
+        <label>
+          Theme
+          <select value={p.theme} onChange={(e) => p.onTheme(e.target.value as ThemePref)} aria-label="Colour theme">
+            <option value="auto">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          className={`live${p.live ? " on" : ""}`}
+          onClick={() => p.onLive(!p.live)}
+          aria-pressed={p.live}
+          title={p.live ? "Pause the once-a-second updates (also saves CPU)" : "Resume live updates"}
+        >
+          <span className="dot" />
+          {p.live ? "Live" : "Paused"}
+        </button>
         <span className="muted sat-status">{satText}</span>
         {p.loading.length > 0 && <span className="muted sat-status">loading {p.loading.join(", ")}…</span>}
         <span className="muted shown">
@@ -99,4 +122,4 @@ export default function Filters(p: Props) {
       </div>
     </div>
   );
-}
+});

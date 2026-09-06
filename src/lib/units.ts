@@ -18,13 +18,18 @@ export const UNITS: { id: Unit; label: string }[] = [
 
 const nf0 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 
+const fracFormats: Intl.NumberFormat[] = [];
+function fracFormat(maxFrac: number): Intl.NumberFormat {
+  return (fracFormats[maxFrac] ??= new Intl.NumberFormat(undefined, { minimumFractionDigits: 0, maximumFractionDigits: maxFrac }));
+}
+
 function sig(x: number, digits: number): string {
   if (x === 0) return "0";
   const abs = Math.abs(x);
   if (abs >= 1e15 || abs < 1e-4) return x.toExponential(Math.max(0, digits - 1));
   const intDigits = Math.floor(Math.log10(abs)) + 1;
   const frac = Math.max(0, digits - intDigits);
-  return new Intl.NumberFormat(undefined, { minimumFractionDigits: 0, maximumFractionDigits: Math.min(frac, 6) }).format(x);
+  return fracFormat(Math.min(frac, 6)).format(x);
 }
 
 export function formatKm(km: number): string {

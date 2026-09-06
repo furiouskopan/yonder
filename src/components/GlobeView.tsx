@@ -1,4 +1,6 @@
 // 3D globe with every tracked satellite orbiting in real time (globe.gl on three.js).
+// Satellites, Earth places and aircraft are three THREE.Points layers whose buffers are rewritten
+// in place each tick; nothing is allocated per frame. Rendering pauses while the tab is hidden.
 import { useEffect, useRef, useState } from "react";
 import Globe from "globe.gl";
 import * as THREE from "three";
@@ -29,10 +31,11 @@ type GlobeT = InstanceType<typeof Globe>;
 interface Layer {
   points: THREE.Points;
   ids: string[];
+  byId: Map<string, Target>;
 }
 
 interface Item {
-  id: string;
+  t: Target;
   lat: number;
   lng: number;
   altKm: number;
@@ -46,7 +49,7 @@ function makeLayer(size: number): Layer {
   const mat = new THREE.PointsMaterial({ size, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0.95, depthWrite: false });
   const points = new THREE.Points(geom, mat);
   points.frustumCulled = false;
-  return { points, ids: [] };
+  return { points, ids: [], byId: new Map() };
 }
 
 function fillLayer(layer: Layer, globe: GlobeT, items: Item[]): void {
@@ -59,9 +62,11 @@ function fillLayer(layer: Layer, globe: GlobeT, items: Item[]): void {
     col = new THREE.BufferAttribute(new Float32Array(n * 3), 3);
     geom.setAttribute("position", pos);
     geom.setAttribute("color", col);
+    layer.ids = new Array<string>(n);
   }
   const pa = pos.array as Float32Array;
   const ca = col.array as Float32Array;
+  const byId = new Map<string, Target>();
   for (let i = 0; i < n; i++) {
     const it = items[i];
     const c = globe.getCoords(it.lat, it.lng, it.altKm / EARTH_R);
@@ -71,11 +76,13 @@ function fillLayer(layer: Layer, globe: GlobeT, items: Item[]): void {
     ca[i * 3] = it.color.r;
     ca[i * 3 + 1] = it.color.g;
     ca[i * 3 + 2] = it.color.b;
+    layer.ids[i] = it.t.id;
+    byId.set(it.t.id, it.t);
   }
   pos.needsUpdate = true;
   col.needsUpdate = true;
   geom.computeBoundingSphere();
-  layer.ids = items.map((i) => i.id);
+  layer.byId = byId;
 }
 
 const COLOR_CACHE = new Map<string, THREE.Color>();
@@ -94,12 +101,16 @@ export default function GlobeView(props: Props) {
   const globeRef = useRef<GlobeT | null>(null);
   const layersRef = useRef<{ sats: Layer; earth: Layer; air: Layer } | null>(null);
   const highlightRef = useRef<THREE.Mesh | null>(null);
-  const byIdRef = useRef(new Map<string, Target>());
   const lastPickRef = useRef(0);
   const propsRef = useRef(props);
   propsRef.current = props;
   const [ready, setReady] = useState(false);
   const [tip, setTip] = useState<{ x: number; y: number; id: string } | null>(null);
+
+  const lookup = (id: string): Target | undefined => {
+    const L = layersRef.current;
+    return L?.sats.byId.get(id) ?? L?.air.byId.get(id) ?? L?.earth.byId.get(id);
+  };
 
   // Create the globe once.
   useEffect(() => {
@@ -144,6 +155,7 @@ export default function GlobeView(props: Props) {
       });
     globe.width(el.clientWidth).height(el.clientHeight);
     globe.pointOfView({ lat: origin.lat, lng: origin.lon, altitude: 2.2 }, 0);
+    globe.renderer().setPixelRatio(Math.min(window.devicePixelRatio, 2));
     const controls = globe.controls() as unknown as { enableDamping: boolean; dampingFactor: number; autoRotate: boolean; zoomSpeed: number };
     controls.enableDamping = true;
     controls.dampingFactor = 0.1;
@@ -204,9 +216,15 @@ export default function GlobeView(props: Props) {
       setTip(null);
       propsRef.current.onHover(null);
     };
+    // The globe renders continuously; stop while the tab is hidden.
+    const onVisibility = () => {
+      if (document.hidden) globe.pauseAnimation();
+      else globe.resumeAnimation();
+    };
     dom.addEventListener("pointermove", onMove);
     dom.addEventListener("click", onClick);
     dom.addEventListener("pointerleave", onLeave);
+    document.addEventListener("visibilitychange", onVisibility);
     const ro = new ResizeObserver(() => globe.width(el.clientWidth).height(el.clientHeight));
     ro.observe(el);
     setReady(true);
@@ -215,6 +233,7 @@ export default function GlobeView(props: Props) {
       dom.removeEventListener("pointermove", onMove);
       dom.removeEventListener("click", onClick);
       dom.removeEventListener("pointerleave", onLeave);
+      document.removeEventListener("visibilitychange", onVisibility);
       globe._destructor();
       globeRef.current = null;
       layersRef.current = null;
@@ -242,8 +261,7 @@ export default function GlobeView(props: Props) {
     const items: Item[] = [];
     for (const t of sats) {
       if (t.subLat === undefined || t.subLon === undefined) continue;
-      byIdRef.current.set(t.id, t);
-      items.push({ id: t.id, lat: t.subLat, lng: t.subLon, altKm: t.heightKm ?? 400, color: color((t.altDeg ?? -1) >= 0 ? "#22d3ee" : "#0e7490") });
+      items.push({ t, lat: t.subLat, lng: t.subLon, altKm: t.heightKm ?? 400, color: color((t.altDeg ?? -1) >= 0 ? "#22d3ee" : "#0e7490") });
     }
     fillLayer(L.sats, globe, items);
   }, [sats, ready]);
@@ -255,8 +273,7 @@ export default function GlobeView(props: Props) {
     const items: Item[] = [];
     for (const t of earthRows) {
       if (t.lat === undefined || t.lon === undefined) continue;
-      byIdRef.current.set(t.id, t);
-      items.push({ id: t.id, lat: t.lat, lng: t.lon, altKm: 8, color: color(CATEGORY_BY_ID[t.category].color) });
+      items.push({ t, lat: t.lat, lng: t.lon, altKm: 8, color: color(CATEGORY_BY_ID[t.category].color) });
     }
     fillLayer(L.earth, globe, items);
   }, [earthRows, ready]);
@@ -268,8 +285,7 @@ export default function GlobeView(props: Props) {
     const items: Item[] = [];
     for (const t of aircraft) {
       if (t.lat === undefined || t.lon === undefined) continue;
-      byIdRef.current.set(t.id, t);
-      items.push({ id: t.id, lat: t.lat, lng: t.lon, altKm: Math.max(2, t.heightKm ?? 0), color: color("#eab308") });
+      items.push({ t, lat: t.lat, lng: t.lon, altKm: Math.max(2, t.heightKm ?? 0), color: color("#eab308") });
     }
     fillLayer(L.air, globe, items);
   }, [aircraft, ready]);
@@ -299,11 +315,11 @@ export default function GlobeView(props: Props) {
     globe.pathsData(track && track.length > 1 ? [{ pts: track.map(([la, lo]) => [la, lo, trackHeightKm / EARTH_R]) }] : []);
   }, [track, trackHeightKm, ready]);
 
-  const tipTarget = tip ? byIdRef.current.get(tip.id) : undefined;
-  const hoverTarget = !tip && hoverId ? byIdRef.current.get(hoverId) : undefined;
+  const tipTarget = tip ? lookup(tip.id) : undefined;
+  const hoverTarget = !tip && hoverId ? lookup(hoverId) : undefined;
 
   return (
-    <div className="globe" ref={divRef}>
+    <div className="globe" ref={divRef} role="application" aria-label="Globe">
       {tip && tipTarget && (
         <div className="solar-tip" style={{ left: tip.x + 14, top: tip.y + 14 }}>
           <strong>{tipTarget.name}</strong>

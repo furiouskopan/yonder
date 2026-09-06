@@ -3,13 +3,15 @@ import type { Origin, SortState, Target } from "../types";
 import { CATEGORY_BY_ID } from "../types";
 import { chordKm, compass, initialBearing } from "../lib/geo";
 import { formatDistance, formatLightTime, formatRate, type Unit } from "../lib/units";
+import { noteOf } from "../lib/target";
 import type { SkyFn } from "../lib/sky";
+import type { RowSource } from "../lib/merge";
 
 const ROW_H = 44;
 const OVERSCAN = 8;
 
 interface Props {
-  rows: Target[];
+  rows: RowSource;
   unit: Unit;
   origin: Origin;
   sky: SkyFn | null;
@@ -56,15 +58,24 @@ const Row = memo(function Row({ t, i, unit, origin, sky, selected, hovered, onSe
   const dir = directionOf(t, origin, sky);
   const rateCls = t.rateKms === undefined ? "" : t.rateKms < 0 ? "closer" : "farther";
   const chord = t.lat !== undefined && cat.realm === "earth" && t.distanceKm > 500 ? `straight line ${formatDistance(chordKm(t.distanceKm), unit)}` : "";
-  const details = [t.note, chord].filter(Boolean).join(" · ");
+  const details = [noteOf(t), chord].filter(Boolean).join(" · ");
   return (
     <div
       className={`row${selected ? " selected" : ""}${hovered ? " hovered" : ""}`}
       style={{ top }}
       onClick={() => onSelect(selected ? null : t.id)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect(selected ? null : t.id);
+        }
+      }}
       onMouseEnter={() => onHover(t.id)}
       onMouseLeave={() => onHover(null)}
+      onFocus={() => onHover(t.id)}
       role="row"
+      aria-selected={selected}
+      tabIndex={0}
       title={details}
     >
       <span className="c-rank">{i + 1}</span>
@@ -111,28 +122,60 @@ export default function DistanceTable({ rows, unit, origin, sky, selectedId, hov
   useEffect(() => {
     const el = bodyRef.current;
     if (!el || !selectedId) return;
-    const idx = rows.findIndex((r) => r.id === selectedId);
+    const idx = rows.indexOf(selectedId);
     if (idx < 0) return;
     const top = idx * ROW_H;
     if (top < el.scrollTop || top + ROW_H > el.scrollTop + el.clientHeight) el.scrollTo({ top: Math.max(0, top - el.clientHeight / 2), behavior: "smooth" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId]);
+  }, [selectedId, sort]);
+
+  // Sort or filter changes can leave the scroll position past the end of a shorter list.
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (el && el.scrollTop > Math.max(0, rows.length * ROW_H - el.clientHeight)) el.scrollTop = 0;
+  }, [rows.length]);
 
   const start = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
   const end = Math.min(rows.length, Math.ceil((scrollTop + height) / ROW_H) + OVERSCAN);
+  const rendered: React.ReactElement[] = [];
+  for (let i = start; i < end; i++) {
+    const t = rows.at(i);
+    rendered.push(
+      <Row
+        key={t.id}
+        t={t}
+        i={i}
+        unit={unit}
+        origin={origin}
+        // Only sky-fixed objects need the per-second sky function; other rows can skip that re-render.
+        sky={t.ra !== undefined ? sky : null}
+        selected={t.id === selectedId}
+        hovered={t.id === hoverId}
+        onSelect={onSelect}
+        onHover={onHover}
+        top={i * ROW_H}
+      />,
+    );
+  }
 
   const head = (key: SortState["key"], label: string, cls: string) => {
     const active = sort.key === key;
     return (
-      <button type="button" className={`${cls} th${active ? " active" : ""}`} onClick={() => onSort({ key, dir: active && sort.dir === "asc" ? "desc" : "asc" })}>
+      <button
+        type="button"
+        className={`${cls} th${active ? " active" : ""}`}
+        aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
+        title={`Sort by ${label.toLowerCase()}`}
+        onClick={() => onSort({ key, dir: active && sort.dir === "asc" ? "desc" : "asc" })}
+      >
         {label}
-        {active ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}
+        <span className="sort-mark">{active ? (sort.dir === "asc" ? "▲" : "▼") : "⇅"}</span>
       </button>
     );
   };
 
   return (
-    <div className="table">
+    <div className="table" role="grid" aria-rowcount={rows.length}>
       <div className="thead" role="row">
         <span className="c-rank">#</span>
         {head("name", "Name", "c-name")}
@@ -145,21 +188,7 @@ export default function DistanceTable({ rows, unit, origin, sky, selectedId, hov
       </div>
       <div className="tbody" ref={bodyRef} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
         <div className="tspacer" style={{ height: rows.length * ROW_H }}>
-          {rows.slice(start, end).map((t, k) => (
-            <Row
-              key={t.id}
-              t={t}
-              i={start + k}
-              unit={unit}
-              origin={origin}
-              sky={sky}
-              selected={t.id === selectedId}
-              hovered={t.id === hoverId}
-              onSelect={onSelect}
-              onHover={onHover}
-              top={(start + k) * ROW_H}
-            />
-          ))}
+          {rendered}
         </div>
         {rows.length === 0 && <div className="empty">Nothing matches. Pick a category above or clear the filter.</div>}
       </div>

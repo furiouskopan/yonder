@@ -2,7 +2,9 @@ import { DEEP_SKY, SOLAR_REGIONS } from "../data/deepsky";
 import { KM_PER_AU, KM_PER_LY, formatPeriodDays } from "./units";
 import { norm } from "./search";
 import type { Target } from "../types";
-import type { StaticData } from "../hooks/useStaticData";
+
+/** Positional rows as stored in public/data/*.json (see scripts/build_data.py for the field order). */
+export type DataRow = (string | number | null)[];
 
 const CONSTELLATIONS: Record<string, string> = {
   And: "Andromeda", Ant: "Antlia", Aps: "Apus", Aqr: "Aquarius", Aql: "Aquila", Ara: "Ara", Ari: "Aries", Aur: "Auriga",
@@ -19,8 +21,15 @@ const CONSTELLATIONS: Record<string, string> = {
   UMi: "Ursa Minor", Vel: "Vela", Vir: "Virgo", Vol: "Volans", Vul: "Vulpecula",
 };
 
-/** Fixed-distance targets: the curated deep-sky list, naked-eye stars, exoplanets and Solar System regions. */
-export function buildFixedTargets(data: StaticData | null): Target[] {
+const byDistance = (a: Target, b: Target): number => a.distanceKm - b.distanceKm;
+
+/**
+ * Fixed-distance targets: Solar System regions, the curated deep-sky list, naked-eye stars and
+ * exoplanets, sorted by distance. Built once per dataset arrival; distances never change.
+ * Star rows: name, ra, dec, ly, mag, con, spect, named. Exoplanet rows: name, host, ly, year,
+ * method, radiusEarth, massEarth, periodDays, ra, dec, planets.
+ */
+export function buildFixedTargets(starRows: DataRow[] | null, exoRows: DataRow[] | null): Target[] {
   const out: Target[] = SOLAR_REGIONS.map((r, i) => ({
     id: `region-${i}`,
     name: r.name,
@@ -37,17 +46,17 @@ export function buildFixedTargets(data: StaticData | null): Target[] {
   // Curated objects first; a catalog star with the same name lends its coordinates and is skipped.
   const consumed = new Set<number>();
   const byName = new Map<string, number>();
-  data?.stars.forEach((s, i) => {
-    if (s.named) byName.set(norm(s.name), i);
+  starRows?.forEach((s, i) => {
+    if (s[7] === 1) byName.set(norm(s[0] as string), i);
   });
   DEEP_SKY.forEach((o, i) => {
     let ra = o.ra;
     let dec = o.dec;
     const j = byName.get(norm(o.name));
-    if (j !== undefined && data) {
+    if (j !== undefined && starRows) {
       consumed.add(j);
-      ra ??= data.stars[j].ra;
-      dec ??= data.stars[j].dec;
+      ra ??= starRows[j][1] as number;
+      dec ??= starRows[j][2] as number;
     }
     out.push({
       id: `dso-${i}`,
@@ -65,58 +74,74 @@ export function buildFixedTargets(data: StaticData | null): Target[] {
     });
   });
 
-  if (data) {
-    data.stars.forEach((s, i) => {
-      if (consumed.has(i)) return;
-      const con = CONSTELLATIONS[s.con] ?? s.con;
+  if (starRows) {
+    for (let i = 0; i < starRows.length; i++) {
+      if (consumed.has(i)) continue;
+      const s = starRows[i];
+      const name = s[0] as string;
+      const conCode = s[5] as string;
+      const con = CONSTELLATIONS[conCode] ?? conCode;
+      const mag = s[4] as number;
+      const spect = (s[6] as string) || "";
+      const named = s[7] === 1;
       out.push({
         id: `hyg-${i}`,
-        name: s.name,
+        name,
         category: "star",
         subtitle: `Star in ${con}`,
-        key: s.key,
-        distanceKm: s.ly * KM_PER_LY,
-        ra: s.ra,
-        dec: s.dec,
+        key: norm(`${name} star ${conCode}`),
+        distanceKm: (s[3] as number) * KM_PER_LY,
+        ra: s[1] as number,
+        dec: s[2] as number,
         kind: "Star",
-        note: `magnitude ${s.mag.toFixed(1)}${s.spect ? ` · ${s.spect}` : ""}`,
+        note: `magnitude ${mag.toFixed(1)}${spect ? ` · ${spect}` : ""}`,
         facts: [
-          ["Apparent magnitude", s.mag.toFixed(2)],
-          ["Spectral type", s.spect || "unknown"],
+          ["Apparent magnitude", mag.toFixed(2)],
+          ["Spectral type", spect || "unknown"],
           ["Constellation", con],
         ],
-        wiki: s.named ? s.name : undefined,
+        wiki: named ? name : undefined,
       });
-    });
-    data.exoplanets.forEach((p, i) => {
+    }
+  }
+  if (exoRows) {
+    for (let i = 0; i < exoRows.length; i++) {
+      const p = exoRows[i];
+      const name = p[0] as string;
+      const host = p[1] as string;
+      const year = p[3] as number;
+      const method = p[4] as string;
+      const radiusEarth = p[5] as number | null;
+      const massEarth = p[6] as number | null;
+      const periodDays = p[7] as number | null;
       const bits = [
-        p.year ? `found ${p.year}` : "",
-        p.radiusEarth ? `${p.radiusEarth.toFixed(1)}× Earth's radius` : "",
-        p.periodDays ? `year lasts ${formatPeriodDays(p.periodDays)}` : "",
+        year ? `found ${year}` : "",
+        radiusEarth ? `${radiusEarth.toFixed(1)}× Earth's radius` : "",
+        periodDays ? `year lasts ${formatPeriodDays(periodDays)}` : "",
       ].filter(Boolean);
       out.push({
         id: `exo-${i}`,
-        name: p.name,
+        name,
         category: "exoplanet",
-        subtitle: `Orbits ${p.host} · ${p.method}`,
-        key: p.key,
-        distanceKm: p.ly * KM_PER_LY,
-        ra: p.ra ?? undefined,
-        dec: p.dec ?? undefined,
+        subtitle: `Orbits ${host} · ${method}`,
+        key: norm(`${name} ${host} exoplanet`),
+        distanceKm: (p[2] as number) * KM_PER_LY,
+        ra: (p[8] as number | null) ?? undefined,
+        dec: (p[9] as number | null) ?? undefined,
         kind: "Exoplanet",
         note: bits.join(" · "),
         facts: [
-          ["Host star", p.host],
-          ["Discovered", p.year ? `${p.year} by ${p.method.toLowerCase()}` : p.method],
-          ["Radius", p.radiusEarth ? `${p.radiusEarth.toFixed(2)} × Earth` : "unknown"],
-          ["Mass", p.massEarth ? `${p.massEarth.toFixed(1)} × Earth` : "unknown"],
-          ["Orbital period", p.periodDays ? formatPeriodDays(p.periodDays) : "unknown"],
-          ["Planets in system", String(p.planets || "?")],
+          ["Host star", host],
+          ["Discovered", year ? `${year} by ${method.toLowerCase()}` : method],
+          ["Radius", radiusEarth ? `${radiusEarth.toFixed(2)} × Earth` : "unknown"],
+          ["Mass", massEarth ? `${massEarth.toFixed(1)} × Earth` : "unknown"],
+          ["Orbital period", periodDays ? formatPeriodDays(periodDays) : "unknown"],
+          ["Planets in system", String((p[10] as number) || "?")],
         ],
-        wiki: p.name,
-        wiki2: p.host,
+        wiki: name,
+        wiki2: host,
       });
-    });
+    }
   }
-  return out;
+  return out.sort(byDistance);
 }

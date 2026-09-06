@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 
-/** Current time in ms, updated on the second boundary. */
-export function useClock(intervalMs = 1000): number {
+/** Current time in ms, updated on the second boundary. When `running` is false the value freezes and nothing ticks. */
+export function useClock(intervalMs = 1000, running = true): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
+    if (!running) return;
+    setNow(Date.now());
     let timer = 0;
     const schedule = () => {
       const t = Date.now();
@@ -14,6 +16,6 @@ export function useClock(intervalMs = 1000): number {
     };
     schedule();
     return () => clearTimeout(timer);
-  }, [intervalMs]);
+  }, [intervalMs, running]);
   return now;
 }

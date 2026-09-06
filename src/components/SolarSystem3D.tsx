@@ -1,5 +1,7 @@
 // Interactive solar system on three.js: rotate, zoom and pan, real orbit shapes, hover and click.
-import { useEffect, useRef, useState } from "react";
+// The scene is built when the set of bodies (or the scale or the orbit data) changes; the
+// once-a-second position update only writes into existing meshes and buffers.
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
@@ -15,7 +17,7 @@ export interface SolarItem {
   kind: string;
   category: string;
   distanceKm: number;
-  orbit?: Vec3[]; // sampled orbit (planets)
+  orbit?: Vec3[]; // sampled orbit (planets); a new array whenever it is resampled
   hzId?: string; // Horizons id for orbit lookup
   radiusKm?: number;
 }
@@ -44,19 +46,21 @@ const KIND_COLORS: Record<string, number> = {
   comet: 0x38bdf8, interstellar: 0x22d3ee, neo: 0xef4444,
 };
 
-function makeScaler(mode: ScaleMode): (v: Vec3) => THREE.Vector3 {
+type Scaler = (v: Vec3, out: THREE.Vector3) => THREE.Vector3;
+
+function makeScaler(mode: ScaleMode): Scaler {
   if (mode === "linear") {
     const k = RADIUS / 35;
-    return (v) => new THREE.Vector3(v.x * k, v.y * k, v.z * k);
+    return (v, out) => out.set(v.x * k, v.y * k, v.z * k);
   }
   const l0 = Math.log10(R_MIN);
   const l1 = Math.log10(R_MAX);
-  return (v) => {
+  return (v, out) => {
     const r = Math.hypot(v.x, v.y, v.z);
-    if (r < 1e-9) return new THREE.Vector3(0, 0, 0);
+    if (r < 1e-9) return out.set(0, 0, 0);
     const s = (Math.max(0, Math.log10(Math.max(r, R_MIN)) - l0) / (l1 - l0)) * RADIUS;
     const f = s / r;
-    return new THREE.Vector3(v.x * f, v.y * f, v.z * f);
+    return out.set(v.x * f, v.y * f, v.z * f);
   };
 }
 
@@ -71,6 +75,41 @@ function makeLabel(text: string, cls: string): CSS2DObject {
   return new CSS2DObject(div);
 }
 
+const tmp = new THREE.Vector3();
+
+/** Write a polyline (optionally closed) into a position buffer. */
+function fillLine(arr: Float32Array, pts: Vec3[], closed: boolean, scale: Scaler): void {
+  for (let i = 0; i < pts.length; i++) {
+    scale(pts[i], tmp);
+    arr[i * 3] = tmp.x;
+    arr[i * 3 + 1] = tmp.y;
+    arr[i * 3 + 2] = tmp.z;
+  }
+  if (closed) {
+    scale(pts[0], tmp);
+    arr[pts.length * 3] = tmp.x;
+    arr[pts.length * 3 + 1] = tmp.y;
+    arr[pts.length * 3 + 2] = tmp.z;
+  }
+}
+
+function lineOf(pts: Vec3[], colorHex: number, opacity: number, closed: boolean, scale: Scaler): THREE.Line {
+  const arr = new Float32Array((pts.length + (closed ? 1 : 0)) * 3);
+  fillLine(arr, pts, closed, scale);
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute("position", new THREE.BufferAttribute(arr, 3));
+  return new THREE.Line(geom, new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity }));
+}
+
+/** Per-body handles into the scene so positions can be updated without rebuilding anything. */
+interface Handle {
+  mesh?: THREE.Mesh;
+  label?: CSS2DObject;
+  orbitLine?: THREE.Line;
+  orbitSrc?: Vec3[];
+  point?: number; // index into the small-body point cloud
+}
+
 interface Scene {
   renderer: THREE.WebGLRenderer;
   labels: CSS2DRenderer;
@@ -81,6 +120,8 @@ interface Scene {
   overlay: THREE.Group;
   pickables: THREE.Object3D[];
   pointIds: string[];
+  small: THREE.Points | null;
+  handles: Map<string, Handle>;
   positions: Map<string, THREE.Vector3>;
   highlight: THREE.Mesh;
   hoverLabel: CSS2DObject;
@@ -95,6 +136,8 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
   propsRef.current = { items, onSelect, onHover, unit };
   const [scaleMode, setScaleMode] = useState<ScaleMode>("log");
   const [ready, setReady] = useState(false);
+  // The scene structure depends only on which bodies exist, not on where they are.
+  const structureKey = useMemo(() => items.map((i) => i.id).join("\n"), [items]);
 
   // Scene setup, once.
   useEffect(() => {
@@ -154,7 +197,11 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
     hoverLabel.visible = false;
     overlay.add(hoverLabel);
 
-    const S: Scene = { renderer, labels, scene, camera, controls, content, overlay, pickables: [], pointIds: [], positions: new Map(), highlight, hoverLabel, dirty: true, raf: 0 };
+    const S: Scene = {
+      renderer, labels, scene, camera, controls, content, overlay,
+      pickables: [], pointIds: [], small: null, handles: new Map(), positions: new Map(),
+      highlight, hoverLabel, dirty: true, raf: 0,
+    };
     sceneRef.current = S;
 
     const raycaster = new THREE.Raycaster();
@@ -178,16 +225,16 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
       const t = performance.now();
       if (t - last < 40) return;
       last = t;
-      const id = pick(ev);
-      propsRef.current.onHover(id);
+      propsRef.current.onHover(pick(ev));
     };
     const onClick = (ev: MouseEvent) => {
       const id = pick(ev);
       if (id) propsRef.current.onSelect(id);
     };
+    const onLeave = () => propsRef.current.onHover(null);
     renderer.domElement.addEventListener("pointermove", onMove);
     renderer.domElement.addEventListener("click", onClick);
-    renderer.domElement.addEventListener("pointerleave", () => propsRef.current.onHover(null));
+    renderer.domElement.addEventListener("pointerleave", onLeave);
 
     const ro = new ResizeObserver(() => {
       const w = el.clientWidth;
@@ -217,6 +264,7 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
       ro.disconnect();
       renderer.domElement.removeEventListener("pointermove", onMove);
       renderer.domElement.removeEventListener("click", onClick);
+      renderer.domElement.removeEventListener("pointerleave", onLeave);
       controls.dispose();
       renderer.dispose();
       el.innerHTML = "";
@@ -225,42 +273,22 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Rebuild the content whenever the data or the scale changes.
+  // Build the scene content when the set of bodies, the orbit data or the scale changes.
   useEffect(() => {
     const S = sceneRef.current;
     if (!S || !ready) return;
     const scale = makeScaler(scaleMode);
-    const disposeGroup = (g: THREE.Group) => {
-      for (const child of [...g.children]) {
-        g.remove(child);
-        const obj = child as THREE.Mesh | THREE.Line | THREE.Points;
-        if ("geometry" in obj && obj.geometry) obj.geometry.dispose();
-        if ("material" in obj && obj.material) (Array.isArray(obj.material) ? obj.material : [obj.material]).forEach((m) => m.dispose());
-        if (child instanceof CSS2DObject) child.element.remove();
-      }
-    };
-    disposeGroup(S.content);
+    for (const child of [...S.content.children]) {
+      S.content.remove(child);
+      const obj = child as THREE.Mesh | THREE.Line | THREE.Points;
+      if ("geometry" in obj && obj.geometry) obj.geometry.dispose();
+      if ("material" in obj && obj.material) (Array.isArray(obj.material) ? obj.material : [obj.material]).forEach((m) => m.dispose());
+      if (child instanceof CSS2DObject) child.element.remove();
+    }
     S.pickables = [];
+    S.handles.clear();
     S.positions.clear();
-
-    const lineOf = (pts: Vec3[], colorHex: number, opacity: number, closed: boolean) => {
-      const arr = new Float32Array((pts.length + (closed ? 1 : 0)) * 3);
-      pts.forEach((p, i) => {
-        const v = scale(p);
-        arr[i * 3] = v.x;
-        arr[i * 3 + 1] = v.y;
-        arr[i * 3 + 2] = v.z;
-      });
-      if (closed) {
-        const v = scale(pts[0]);
-        arr[pts.length * 3] = v.x;
-        arr[pts.length * 3 + 1] = v.y;
-        arr[pts.length * 3 + 2] = v.z;
-      }
-      const geom = new THREE.BufferGeometry();
-      geom.setAttribute("position", new THREE.BufferAttribute(arr, 3));
-      return new THREE.Line(geom, new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity }));
-    };
+    S.small = null;
 
     // Reference rings at 1, 10 and 100 AU
     for (const au of [1, 10, 100]) {
@@ -269,58 +297,102 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
         const a = (i / 128) * Math.PI * 2;
         pts.push({ x: au * Math.cos(a), y: au * Math.sin(a), z: 0 });
       }
-      const ring = lineOf(pts, 0x334155, 0.5, false);
-      S.content.add(ring);
+      S.content.add(lineOf(pts, 0x334155, 0.5, false, scale));
       const lbl = makeLabel(`${au} AU`, "ring");
-      lbl.position.copy(scale({ x: au * Math.SQRT1_2, y: au * Math.SQRT1_2, z: 0 }));
+      scale({ x: au * Math.SQRT1_2, y: au * Math.SQRT1_2, z: 0 }, lbl.position);
       S.content.add(lbl);
     }
 
-    const smallPos: number[] = [];
-    const smallCol: number[] = [];
+    const current = propsRef.current.items;
     const smallIds: string[] = [];
+    const smallCol: number[] = [];
     const c = new THREE.Color();
-    for (const it of items) {
-      const p = scale(it.pos);
-      S.positions.set(it.id, p);
+    for (const it of current) {
+      const h: Handle = {};
       if (isPlanet(it)) {
         const r = it.radiusKm ? Math.min(2.4, Math.max(0.8, (Math.log10(it.radiusKm) - 2.5) * 0.9)) : 1;
-        const mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 20), new THREE.MeshBasicMaterial({ color: PLANET_COLORS[it.name] ?? 0xe5e7eb }));
-        mesh.position.copy(p);
-        mesh.userData.id = it.id;
-        S.content.add(mesh);
-        S.pickables.push(mesh);
-        const lbl = makeLabel(it.id === "earth" ? "Earth (you are here)" : it.name, "planet");
-        lbl.position.copy(p);
-        S.content.add(lbl);
-        if (it.orbit) S.content.add(lineOf(it.orbit, PLANET_COLORS[it.name] ?? 0x64748b, 0.45, true));
+        h.mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 20), new THREE.MeshBasicMaterial({ color: PLANET_COLORS[it.name] ?? 0xe5e7eb }));
+        h.mesh.userData.id = it.id;
+        S.content.add(h.mesh);
+        S.pickables.push(h.mesh);
+        h.label = makeLabel(it.id === "earth" ? "Earth (you are here)" : it.name, "planet");
+        S.content.add(h.label);
+        if (it.orbit) {
+          h.orbitLine = lineOf(it.orbit, PLANET_COLORS[it.name] ?? 0x64748b, 0.45, true, scale);
+          h.orbitSrc = it.orbit;
+          S.content.add(h.orbitLine);
+        }
       } else {
-        smallPos.push(p.x, p.y, p.z);
+        h.point = smallIds.length;
+        smallIds.push(it.id);
         c.setHex(KIND_COLORS[it.kind] ?? 0xf97316);
         smallCol.push(c.r, c.g, c.b);
-        smallIds.push(it.id);
         const o = it.hzId ? orbits.get(it.hzId) : undefined;
         if (o?.elements) {
           const path = conicPath(o.elements, it.kind === "interstellar" || it.kind === "comet" ? 320 : 160);
-          if (path.length > 2) S.content.add(lineOf(path, KIND_COLORS[it.kind] ?? 0xf97316, it.kind === "asteroid" || it.kind === "neo" ? 0.12 : 0.3, o.elements.e < 1));
+          if (path.length > 2) S.content.add(lineOf(path, KIND_COLORS[it.kind] ?? 0xf97316, it.kind === "asteroid" || it.kind === "neo" ? 0.12 : 0.3, o.elements.e < 1, scale));
         } else if (o?.trail) {
           const pts = o.trail.rows.map((r) => ({ x: r[0], y: r[1], z: r[2] }));
-          if (pts.length > 1) S.content.add(lineOf(pts, KIND_COLORS.probe, 0.45, false));
+          if (pts.length > 1) S.content.add(lineOf(pts, KIND_COLORS.probe, 0.45, false, scale));
         }
       }
+      S.handles.set(it.id, h);
     }
     if (smallIds.length) {
       const geom = new THREE.BufferGeometry();
-      geom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(smallPos), 3));
+      geom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(smallIds.length * 3), 3));
       geom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(smallCol), 3));
       const pts = new THREE.Points(geom, new THREE.PointsMaterial({ size: 2.6, vertexColors: true, sizeAttenuation: false, transparent: true, opacity: 0.95, depthWrite: false }));
       pts.frustumCulled = false;
       S.content.add(pts);
       S.pickables.push(pts);
+      S.small = pts;
     }
     S.pointIds = smallIds;
     S.dirty = true;
-  }, [items, orbits, scaleMode, ready]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [structureKey, orbits, scaleMode, ready]);
+
+  // Move everything to its current position (every tick). Writes into existing objects only.
+  useEffect(() => {
+    const S = sceneRef.current;
+    if (!S || !ready) return;
+    const scale = makeScaler(scaleMode);
+    const posAttr = S.small?.geometry.getAttribute("position") as THREE.BufferAttribute | undefined;
+    const arr = posAttr?.array as Float32Array | undefined;
+    for (const it of items) {
+      const h = S.handles.get(it.id);
+      if (!h) continue;
+      let p = S.positions.get(it.id);
+      if (!p) {
+        p = new THREE.Vector3();
+        S.positions.set(it.id, p);
+      }
+      scale(it.pos, p);
+      if (h.mesh) {
+        h.mesh.position.copy(p);
+        h.label?.position.copy(p);
+        if (h.orbitLine && it.orbit && it.orbit !== h.orbitSrc) {
+          const attr = h.orbitLine.geometry.getAttribute("position") as THREE.BufferAttribute;
+          if (attr.count === it.orbit.length + 1) {
+            fillLine(attr.array as Float32Array, it.orbit, true, scale);
+            attr.needsUpdate = true;
+            h.orbitLine.geometry.computeBoundingSphere();
+          }
+          h.orbitSrc = it.orbit;
+        }
+      } else if (h.point !== undefined && arr) {
+        arr[h.point * 3] = p.x;
+        arr[h.point * 3 + 1] = p.y;
+        arr[h.point * 3 + 2] = p.z;
+      }
+    }
+    if (posAttr && S.small) {
+      posAttr.needsUpdate = true;
+      S.small.geometry.computeBoundingSphere();
+    }
+    S.dirty = true;
+  }, [items, scaleMode, ready]);
 
   // Highlight the selected body and label the hovered one.
   useEffect(() => {
@@ -353,7 +425,7 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
   };
 
   return (
-    <div className="solar3d" ref={wrapRef}>
+    <div className="solar3d" ref={wrapRef} role="application" aria-label="Solar system">
       <div className="s3d-toolbar">
         <button type="button" onClick={() => view("top")}>Top-down</button>
         <button type="button" onClick={() => view("3d")}>3D</button>

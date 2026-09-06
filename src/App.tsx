@@ -1,11 +1,11 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import * as A from "astronomy-engine";
 import type { Category, SortState, Target } from "./types";
 import { CATEGORIES, CATEGORY_BY_ID } from "./types";
-import { ALL_ON, usePrefs } from "./hooks/usePrefs";
+import { ALL_ON, usePrefs, type ThemePref } from "./hooks/usePrefs";
 import { useClock } from "./hooks/useClock";
-import { useStaticData, type PlaceRow } from "./hooks/useStaticData";
-import { useEarthTargets } from "./hooks/useEarthTargets";
+import { useStaticData } from "./hooks/useStaticData";
+import { LANDMARK_TARGETS, useEarthTargets } from "./hooks/useEarthTargets";
 import { useHorizons } from "./hooks/useHorizons";
 import { useOrbits } from "./hooks/useOrbits";
 import { usePoi } from "./hooks/usePoi";
@@ -14,12 +14,11 @@ import { useSatellites } from "./hooks/useSatellites";
 import { useAircraft } from "./hooks/useAircraft";
 import { useCustomPlaces } from "./hooks/useCustomPlaces";
 import { useDescription } from "./hooks/useDescription";
-import { buildFixedTargets } from "./lib/stars";
 import { norm } from "./lib/search";
 import { haversineKm } from "./lib/geo";
 import { makeSky } from "./lib/sky";
+import { comparatorFor, lazyIndex, mergeRows, sortByKey, sortStatic } from "./lib/merge";
 import { EARTH_PERIOD_DAYS, SOLAR_BODIES, makeObserver, makeTime, orbitSamples } from "./lib/astro";
-import { LANDMARKS } from "./data/landmarks";
 import OriginPanel, { type SearchEntry } from "./components/OriginPanel";
 import Filters from "./components/Filters";
 import DistanceTable from "./components/DistanceTable";
@@ -33,46 +32,22 @@ const GlobeView = lazy(() => import("./components/GlobeView"));
 const SolarSystem3D = lazy(() => import("./components/SolarSystem3D"));
 
 const ISS_ID = "sat-25544";
+const EMPTY: Target[] = [];
+const MAP_SAT_LIMIT = 800;
 
-const byDistance = (a: Target, b: Target): number => {
-  const x = a.distanceKm;
-  const y = b.distanceKm;
-  if (Number.isNaN(x)) return Number.isNaN(y) ? 0 : 1;
-  if (Number.isNaN(y)) return -1;
-  return x - y;
-};
-
-/** Merge lists that are each sorted by distance (NaN last) into one sorted list. */
-function mergeByDistance(lists: Target[][]): Target[] {
-  const total = lists.reduce((s, l) => s + l.length, 0);
-  const out: Target[] = new Array<Target>(total);
-  const idx = lists.map(() => 0);
-  for (let k = 0; k < total; k++) {
-    let best = -1;
-    let bestD = Infinity;
-    for (let i = 0; i < lists.length; i++) {
-      const l = lists[i];
-      if (idx[i] >= l.length) continue;
-      const d = l[idx[i]].distanceKm;
-      const dd = Number.isNaN(d) ? Infinity : d;
-      if (best < 0 || dd < bestD) {
-        best = i;
-        bestD = dd;
-      }
-    }
-    out[k] = lists[best][idx[best]++];
-  }
-  return out;
-}
-
-function useDarkMode(): boolean {
-  const [dark, setDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
+/** Resolved dark/light from the preference plus the system setting; also stamps <html data-theme>. */
+function useTheme(pref: ThemePref): boolean {
+  const [sysDark, setSysDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const on = () => setDark(mq.matches);
+    const on = () => setSysDark(mq.matches);
     mq.addEventListener("change", on);
     return () => mq.removeEventListener("change", on);
   }, []);
+  const dark = pref === "auto" ? sysDark : pref === "dark";
+  useEffect(() => {
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+  }, [dark]);
   return dark;
 }
 
@@ -86,57 +61,78 @@ function useStableRows(rows: Target[]): Target[] {
   return ref.current;
 }
 
+type Counts = Record<Category, number>;
+
+/** Returns the previous counts object while every number is unchanged, so memoised children skip the per-second render. */
+function useStableCounts(counts: Counts): Counts {
+  const ref = useRef(counts);
+  const prev = ref.current;
+  if (prev !== counts && CATEGORIES.some((c) => prev[c.id] !== counts[c.id])) ref.current = counts;
+  return ref.current;
+}
+
+function countOf(list: Target[]): Counts {
+  const c = Object.fromEntries(CATEGORIES.map((k) => [k.id, 0])) as Counts;
+  for (const t of list) c[t.category]++;
+  return c;
+}
+
 export default function App() {
   const [prefs, setPrefs] = usePrefs();
-  const { origin, unit, cats, satSet, pinOnClick, mapMode, basemap } = prefs;
-  const now = useClock(1000);
-  const dark = useDarkMode();
+  const { origin, unit, cats, satSet, pinOnClick, mapMode, basemap, theme } = prefs;
+  const [live, setLive] = useState(true);
+  const now = useClock(1000, live);
+  const dark = useTheme(theme);
   const { data: staticData, loading: loadingSets, error: staticError } = useStaticData();
   const custom = useCustomPlaces();
   const horizons = useHorizons();
   const { orbits } = useOrbits();
   const { pois, state: poiState } = usePoi(origin, cats.poi);
-  const earth = useEarthTargets(origin, staticData, custom.places, pois);
+  const { byDistance: earth, all: earthAll } = useEarthTargets(origin, staticData, custom.places, pois);
+  const fixed = staticData?.fixed ?? EMPTY;
   const space = useSpaceTargets(now, origin, horizons.tables);
   const sats = useSatellites(now, origin, satSet);
   const air = useAircraft(now, origin, cats.aircraft);
-  const fixed = useMemo(() => buildFixedTargets(staticData).sort(byDistance), [staticData]);
 
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortState>({ key: "distance", dir: "asc" });
   const [selectedId, setSelectedId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("select"));
   const [hoverId, setHoverId] = useState<string | null>(null);
 
-  // ---- filtering and merging (static lists are filtered only when the filter changes) ----
-  const q = norm(search.trim());
-  const pass = useCallback((t: Target) => cats[t.category] && (!q || (t.key ?? norm(t.name)).includes(q)), [cats, q]);
+  // ---- filtering ----
+  // Typing stays responsive: the 320k-row filter runs on the deferred value, not on every keystroke.
+  const q = norm(useDeferredValue(search).trim());
+  const allOn = useMemo(() => CATEGORIES.every((c) => cats[c.id]), [cats]);
+  const filterList = useCallback(
+    (list: Target[]): Target[] => (allOn && !q ? list : list.filter((t) => cats[t.category] && (!q || (t.key ?? norm(t.name)).includes(q)))),
+    [allOn, q, cats],
+  );
+  const earthFiltered = useMemo(() => filterList(earth), [earth, filterList]);
+  const fixedFiltered = useMemo(() => filterList(fixed), [fixed, filterList]);
+  const satRows = useMemo(() => filterList(sats.targets), [sats.targets, filterList]);
+  const airRows = useMemo(() => filterList(air.targets), [air.targets, filterList]);
   const dynamic = useMemo(() => [...space.targets, ...sats.targets, ...air.targets], [space.targets, sats.targets, air.targets]);
-  const earthFiltered = useMemo(() => earth.filter(pass), [earth, pass]);
-  const fixedFiltered = useMemo(() => fixed.filter(pass), [fixed, pass]);
-  const dynamicFiltered = useMemo(() => dynamic.filter(pass).sort(byDistance), [dynamic, pass]);
-  const visible = useMemo(() => {
-    if (sort.key === "name") {
-      const dir = sort.dir === "asc" ? 1 : -1;
-      return [...earthFiltered, ...dynamicFiltered, ...fixedFiltered].sort((a, b) => dir * a.name.localeCompare(b.name));
-    }
-    const merged = mergeByDistance([earthFiltered, dynamicFiltered, fixedFiltered]);
-    if (sort.dir === "asc") return merged;
-    const finite = merged.filter((t) => !Number.isNaN(t.distanceKm)).reverse();
-    return [...finite, ...merged.filter((t) => Number.isNaN(t.distanceKm))];
-  }, [earthFiltered, dynamicFiltered, fixedFiltered, sort]);
 
-  const countOf = (list: Target[]) => {
-    const c = Object.fromEntries(CATEGORIES.map((k) => [k.id, 0])) as Record<Category, number>;
-    for (const t of list) c[t.category]++;
-    return c;
-  };
+  // ---- table rows: a virtual merge of the static tier (sorted when the filter/sort changes) and the dynamic tier (sorted per tick) ----
+  const cmp = useMemo(() => comparatorFor(sort), [sort]);
+  // Name order does not depend on the origin, so it is computed from the catalogue-order list and survives origin changes.
+  const nameSorted = useMemo(() => (sort.key === "name" ? sortByKey(filterList(earthAll).concat(filterList(fixed))) : null), [sort.key, earthAll, fixed, filterList]);
+  const staticSorted = useMemo(() => {
+    if (nameSorted) return sort.dir === "asc" ? nameSorted : nameSorted.slice().reverse();
+    return sortStatic([earthFiltered, fixedFiltered], sort, cmp);
+  }, [nameSorted, earthFiltered, fixedFiltered, sort, cmp]);
+  const staticLookup = useMemo(() => lazyIndex(staticSorted), [staticSorted]);
+  const dynamicSorted = useMemo(() => filterList(dynamic).sort(cmp), [dynamic, filterList, cmp]);
+  const rows = useMemo(() => mergeRows(staticSorted, dynamicSorted, cmp, staticLookup), [staticSorted, dynamicSorted, cmp, staticLookup]);
+
   const earthCounts = useMemo(() => countOf(earth), [earth]);
   const fixedCounts = useMemo(() => countOf(fixed), [fixed]);
+  const dynamicCounts = useStableCounts(useMemo(() => countOf(dynamic), [dynamic]));
   const counts = useMemo(() => {
-    const c = countOf(dynamic);
+    const c = { ...dynamicCounts };
     for (const k of CATEGORIES) c[k.id] += earthCounts[k.id] + fixedCounts[k.id];
     return c;
-  }, [dynamic, earthCounts, fixedCounts]);
+  }, [dynamicCounts, earthCounts, fixedCounts]);
   const total = earth.length + fixed.length + dynamic.length;
 
   // ---- selection ----
@@ -148,41 +144,54 @@ export default function App() {
   const selected = selectedDynamic ?? selectedStatic;
   const description = useDescription(selected);
 
+  // Escape closes the detail panel (a full-screen pane handles Escape itself).
+  useEffect(() => {
+    if (!selectedId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || document.querySelector(".pane.fullscreen")) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+      setSelectedId(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedId]);
+
   const sky = useMemo(() => makeSky(makeTime(now), makeObserver(origin)), [now, origin]);
 
   // ---- origin helpers ----
+  // The suggestion index is a list of references into the existing targets; nothing is copied.
   const searchIndex = useMemo<SearchEntry[]>(() => {
-    const idx: SearchEntry[] = [];
+    const cities: Target[] = [];
+    const towns: Target[] = [];
+    const airports: Target[] = [];
     if (staticData) {
-      for (const c of staticData.cities) idx.push({ name: c.name, sub: staticData.countryNames[c.cc] ?? c.cc, lat: c.lat, lon: c.lon, key: norm(c.name) });
+      for (const t of staticData.earth) {
+        if (t.category === "city" || t.category === "capital") cities.push(t);
+        else if (t.category === "town") towns.push(t);
+        else if (t.category === "airport" && (t.kind === "large_airport" || t.kind === "medium_airport")) airports.push(t);
+      }
     }
-    for (const l of LANDMARKS) idx.push({ name: l.name, sub: l.kind, lat: l.lat, lon: l.lon, key: norm(l.name) });
-    for (const p of custom.places) idx.push({ name: p.name, sub: "My place", lat: p.lat, lon: p.lon, key: norm(p.name) });
-    if (staticData) {
-      for (const c of staticData.towns) idx.push({ name: c.name, sub: staticData.countryNames[c.cc] ?? c.cc, lat: c.lat, lon: c.lon, key: norm(c.name) });
-      for (const a of staticData.airports) if (a.type === "large_airport" || a.type === "medium_airport") idx.push({ name: a.name, sub: [a.iata, a.municipality].filter(Boolean).join(" · "), lat: a.lat, lon: a.lon, key: norm(a.name) });
-    }
-    return idx;
+    const mine: SearchEntry[] = custom.places.map((p) => ({ name: p.name, subtitle: "My place", category: "custom", lat: p.lat, lon: p.lon, key: norm(p.name) }));
+    return [...cities, ...LANDMARK_TARGETS, ...mine, ...towns, ...airports];
   }, [staticData, custom.places]);
 
   const nearestName = useCallback(
     (lat: number, lon: number): string => {
       const coords = `${lat.toFixed(3)}°, ${lon.toFixed(3)}°`;
       if (!staticData) return coords;
-      let best: PlaceRow | null = null;
+      let best: Target | null = null;
       let bd = Infinity;
-      for (const list of [staticData.cities, staticData.towns]) {
-        for (const c of list) {
-          const d = haversineKm(lat, lon, c.lat, c.lon);
-          if (d < bd) {
-            bd = d;
-            best = c;
-          }
+      for (const t of staticData.earth) {
+        if (t.category === "airport" || t.lat === undefined || t.lon === undefined) continue;
+        const d = haversineKm(lat, lon, t.lat, t.lon);
+        if (d < bd) {
+          bd = d;
+          best = t;
         }
       }
       if (!best) return coords;
-      const country = staticData.countryNames[best.cc] ?? best.cc;
-      return bd < 2 ? `${best.name}, ${country}` : `${Math.round(bd)} km from ${best.name}, ${country}`;
+      const place = `${best.name}, ${(best.subtitle ?? "").replace(/^Capital of /, "")}`;
+      return bd < 2 ? place : `${Math.round(bd)} km from ${place}`;
     },
     [staticData],
   );
@@ -194,18 +203,30 @@ export default function App() {
     [setPrefs, nearestName],
   );
 
-  // ---- category chips ----
-  const onSolo = (c: Category) => {
-    const alreadySolo = CATEGORIES.every((k) => cats[k.id] === (k.id === c));
-    setPrefs({ cats: alreadySolo ? ALL_ON : (Object.fromEntries(CATEGORIES.map((k) => [k.id, k.id === c])) as Record<Category, boolean>) });
-  };
+  // ---- stable callbacks for memoised children ----
+  const onSolo = useCallback(
+    (c: Category) =>
+      setPrefs((p) => {
+        const alreadySolo = CATEGORIES.every((k) => p.cats[k.id] === (k.id === c));
+        return { cats: alreadySolo ? ALL_ON : (Object.fromEntries(CATEGORIES.map((k) => [k.id, k.id === c])) as Record<Category, boolean>) };
+      }),
+    [setPrefs],
+  );
+  const onToggle = useCallback((c: Category) => setPrefs((p) => ({ cats: { ...p.cats, [c]: !p.cats[c] } })), [setPrefs]);
+  const onAll = useCallback(() => setPrefs({ cats: ALL_ON }), [setPrefs]);
+  const onUnit = useCallback((u: typeof unit) => setPrefs({ unit: u }), [setPrefs]);
+  const onSatSet = useCallback((id: string) => setPrefs({ satSet: id }), [setPrefs]);
+  const onTheme = useCallback((t: ThemePref) => setPrefs({ theme: t }), [setPrefs]);
+  const onBasemap = useCallback((id: string) => setPrefs({ basemap: id }), [setPrefs]);
+  const onPinToggle = useCallback((v: boolean) => setPrefs({ pinOnClick: v }), [setPrefs]);
 
   // ---- rows for the map and the globe ----
+  // Nearest Earth places, capped so landmarks and points of interest are not drowned out by towns.
   const earthRows = useStableRows(
     useMemo(() => {
       const out: Target[] = [];
       let small = 0;
-      for (const t of visible) {
+      for (const t of earthFiltered) {
         if (t.lat === undefined || CATEGORY_BY_ID[t.category].realm !== "earth") continue;
         if (t.category === "city" || t.category === "town" || t.category === "airport") {
           if (small >= 400) continue;
@@ -215,10 +236,9 @@ export default function App() {
         if (out.length >= 1200) break;
       }
       return out;
-    }, [visible]),
+    }, [earthFiltered]),
   );
-  const satRows = useMemo(() => visible.filter((t) => t.category === "satellite"), [visible]);
-  const airRows = useMemo(() => visible.filter((t) => t.category === "aircraft"), [visible]);
+  const mapSats = useMemo(() => (satRows.length > MAP_SAT_LIMIT ? satRows.slice(0, MAP_SAT_LIMIT) : satRows), [satRows]);
 
   // Ground track for the selected satellite, or the ISS by default. Refreshed once a minute.
   const trackTargetId = selected?.category === "satellite" ? selected.id : sats.targets.some((t) => t.id === ISS_ID) ? ISS_ID : null;
@@ -277,41 +297,47 @@ export default function App() {
 
   const horizonsReady = horizons.tables.filter((t) => t.status === "ok").length;
   const trackHeightKm = trackTarget?.heightKm ?? 420;
+  const loading = loadingSets.length > 0;
 
   return (
     <div className="app">
+      {loading && <div className="progress" role="progressbar" aria-label="Loading datasets" />}
       <header className="top">
         <div className="brand">
           <h1>Yonder</h1>
           <span className="tagline">how far is everything from here</span>
         </div>
-        <OriginPanel origin={origin} index={searchIndex} onChange={setOrigin} pinOnClick={pinOnClick} onPinToggle={(v) => setPrefs({ pinOnClick: v })} />
+        <OriginPanel origin={origin} index={searchIndex} onChange={setOrigin} pinOnClick={pinOnClick} onPinToggle={onPinToggle} />
         <CustomPlacesPanel places={custom.places} onAdd={custom.add} onRemove={custom.remove} status={custom.status} error={custom.error} origin={origin} />
       </header>
       <Filters
         cats={cats}
         counts={counts}
         onSolo={onSolo}
-        onToggle={(c) => setPrefs({ cats: { ...cats, [c]: !cats[c] } })}
-        onAll={() => setPrefs({ cats: ALL_ON })}
+        onToggle={onToggle}
+        onAll={onAll}
         search={search}
         onSearch={setSearch}
         unit={unit}
-        onUnit={(u) => setPrefs({ unit: u })}
+        onUnit={onUnit}
         satSet={satSet}
         satSets={sats.sets}
-        onSatSet={(id) => setPrefs({ satSet: id })}
+        onSatSet={onSatSet}
         satState={sats.state}
-        shown={visible.length}
+        shown={rows.length}
         total={total}
         loading={loadingSets}
+        live={live}
+        onLive={setLive}
+        theme={theme}
+        onTheme={onTheme}
       />
       {staticError && <div className="banner error">City data failed to load: {staticError}</div>}
       {horizons.error && <div className="banner warn">NASA Horizons data unavailable: {horizons.error}. Is the server running?</div>}
       <main className={`main${selected ? " with-detail" : ""}`}>
         <Pane title="Distances" className="table-pane">
           <DistanceTable
-            rows={visible}
+            rows={rows}
             unit={unit}
             origin={origin}
             sky={sky}
@@ -331,11 +357,11 @@ export default function App() {
             title={mapMode === "2d" ? "Map" : "Globe"}
             className="map-pane"
             actions={
-              <div className="segmented">
-                <button type="button" className={mapMode === "2d" ? "on" : ""} onClick={() => setPrefs({ mapMode: "2d" })}>
+              <div className="segmented" role="group" aria-label="Map mode">
+                <button type="button" className={mapMode === "2d" ? "on" : ""} aria-pressed={mapMode === "2d"} onClick={() => setPrefs({ mapMode: "2d" })}>
                   2D map
                 </button>
-                <button type="button" className={mapMode === "3d" ? "on" : ""} onClick={() => setPrefs({ mapMode: "3d" })}>
+                <button type="button" className={mapMode === "3d" ? "on" : ""} aria-pressed={mapMode === "3d"} onClick={() => setPrefs({ mapMode: "3d" })}>
                   3D globe
                 </button>
               </div>
@@ -347,7 +373,7 @@ export default function App() {
                 onOriginChange={setOrigin}
                 pinOnClick={pinOnClick}
                 earthRows={earthRows}
-                satRows={satRows.slice(0, 800)}
+                satRows={mapSats}
                 airRows={airRows}
                 selected={selected}
                 hoverId={hoverId}
@@ -355,7 +381,7 @@ export default function App() {
                 unit={unit}
                 basemap={basemap}
                 dark={dark}
-                onBasemap={(id) => setPrefs({ basemap: id })}
+                onBasemap={onBasemap}
                 onSelect={setSelectedId}
                 onHover={setHoverId}
               />
@@ -389,7 +415,9 @@ export default function App() {
       </main>
       <footer className="foot">
         <span>
-          {new Date(now).toLocaleTimeString()} · Horizons bodies {horizonsReady}/{horizons.tables.length || "…"}
+          {new Date(now).toLocaleTimeString()}
+          {!live && " · paused"}
+          {` · Horizons bodies ${horizonsReady}/${horizons.tables.length || "…"}`}
           {cats.poi && poiState.status === "loading" && " · finding places nearby…"}
           {cats.poi && poiState.status === "ready" && ` · ${poiState.count} places within ${poiState.radiusKm ?? 22} km`}
           {cats.poi && poiState.status === "error" && ` · nearby places unavailable (${poiState.error})`}

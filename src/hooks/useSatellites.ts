@@ -29,15 +29,10 @@ interface SatFacts {
   rcs: number | null;
 }
 
+/** The constant part of a satellite's Target, built once per set. Per-tick fields are spread on top. */
 interface SatMeta {
   norad: number;
-  name: string;
-  intl: string;
-  group: string;
-  cls: string;
-  key: string;
-  facts?: SatFacts;
-  wiki: string;
+  base: Omit<Target, "distanceKm">;
 }
 
 interface ApiSet {
@@ -178,43 +173,18 @@ export function useSatellites(now: number, origin: Origin, setId: string) {
           const d = m.data[o];
           dist[i] = d;
           if (!Number.isFinite(d)) continue;
-          const mt = meta[i];
           const rate = prev && dt > 0 && Number.isFinite(prev.dist[i]) ? (d - prev.dist[i]) / dt : undefined;
-          const height = m.data[o + 5];
-          const f = mt.facts;
+          // Height and speed are formatted on demand by noteOf(); only numbers are stored per tick.
           out.push({
-            id: `sat-${mt.norad}`,
-            name: mt.name,
-            category: "satellite",
-            subtitle: `${CLASS_LABELS[mt.cls] ?? "Satellite"}${f?.owner ? ` · ${f.owner}` : ""}`,
-            key: mt.key,
+            ...meta[i].base,
             distanceKm: d,
             rateKms: rate,
             azDeg: m.data[o + 1],
             altDeg: m.data[o + 2],
             subLat: m.data[o + 3],
             subLon: m.data[o + 4],
-            heightKm: height,
+            heightKm: m.data[o + 5],
             speedKms: m.data[o + 6],
-            note: `${Math.round(height).toLocaleString()} km up · ${m.data[o + 6].toFixed(2)} km/s · launched ${f?.launched || launchYear(mt.intl)}`,
-            kind: mt.cls,
-            wiki: mt.wiki,
-            facts: [
-              ["NORAD ID", String(mt.norad)],
-              ["International designator", mt.intl],
-              ...(f
-                ? ([
-                    ["Owner", f.owner],
-                    ["Launched", `${f.launched}${f.site ? ` from ${f.site}` : ""}`],
-                    ["Object type", f.type],
-                    ["Status", f.status],
-                    ["Orbit", f.perigee !== null && f.apogee !== null ? `${Math.round(f.perigee).toLocaleString()} × ${Math.round(f.apogee).toLocaleString()} km` : "unknown"],
-                    ["Period", f.period !== null ? `${f.period.toFixed(1)} min` : "unknown"],
-                    ["Inclination", f.inc !== null ? `${f.inc.toFixed(1)}°` : "unknown"],
-                    ["Radar cross-section", f.rcs !== null ? `${f.rcs} m²` : "unknown"],
-                  ] as [string, string][])
-                : []),
-            ],
           });
         }
         prevRef.current = { t: m.t, dist };
@@ -256,16 +226,38 @@ export function useSatellites(now: number, origin: Origin, setId: string) {
       .then((api) => {
         if (cancelled) return;
         genRef.current += 1;
-        metaRef.current = api.sats.map((s) => ({
-          norad: s.norad,
-          name: s.name,
-          intl: s.intl,
-          group: s.group,
-          cls: s.cls,
-          key: norm(`${s.name} ${CLASS_LABELS[s.cls] ?? ""} ${s.facts?.owner ?? ""}`),
-          facts: s.facts,
-          wiki: wikiHint(s.name),
-        }));
+        metaRef.current = api.sats.map((s) => {
+          const f = s.facts;
+          return {
+            norad: s.norad,
+            base: {
+              id: `sat-${s.norad}`,
+              name: s.name,
+              category: "satellite",
+              subtitle: `${CLASS_LABELS[s.cls] ?? "Satellite"}${f?.owner ? ` · ${f.owner}` : ""}`,
+              key: norm(`${s.name} ${CLASS_LABELS[s.cls] ?? ""} ${f?.owner ?? ""}`),
+              note: `launched ${f?.launched || launchYear(s.intl)}`,
+              kind: s.cls,
+              wiki: wikiHint(s.name),
+              facts: [
+                ["NORAD ID", String(s.norad)],
+                ["International designator", s.intl],
+                ...(f
+                  ? ([
+                      ["Owner", f.owner],
+                      ["Launched", `${f.launched}${f.site ? ` from ${f.site}` : ""}`],
+                      ["Object type", f.type],
+                      ["Status", f.status],
+                      ["Orbit", f.perigee !== null && f.apogee !== null ? `${Math.round(f.perigee).toLocaleString()} × ${Math.round(f.apogee).toLocaleString()} km` : "unknown"],
+                      ["Period", f.period !== null ? `${f.period.toFixed(1)} min` : "unknown"],
+                      ["Inclination", f.inc !== null ? `${f.inc.toFixed(1)}°` : "unknown"],
+                      ["Radar cross-section", f.rcs !== null ? `${f.rcs} m²` : "unknown"],
+                    ] as [string, string][])
+                  : []),
+              ],
+            },
+          };
+        });
         prevRef.current = null;
         busyRef.current = false;
         workerRef.current?.postMessage({ type: "load", gen: genRef.current, sats: api.sats.map((s) => ({ norad: s.norad, l1: s.l1, l2: s.l2 })) });

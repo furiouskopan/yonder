@@ -77,6 +77,7 @@ export interface Target {
   helio?: Vec3; // heliocentric ecliptic J2000 position, AU
   approx?: boolean;
   note?: string;
+  pop?: number; // population; formatted on demand (see lib/target.ts noteOf)
   kind?: string;
   wiki?: string; // Wikipedia hint: a title, "lang:Title" or "wikidata:Q..."
   wiki2?: string; // fallback query

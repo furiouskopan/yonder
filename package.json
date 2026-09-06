@@ -12,7 +12,6 @@
     "data": "python scripts/build_data.py"
   },
   "dependencies": {
-    "@types/three": "^0.185.4",
     "astronomy-engine": "^2.1.19",
     "compression": "^1.8.1",
     "express": "^5.2.1",
@@ -30,10 +29,14 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
+    "@types/three": "^0.185.4",
     "@vitejs/plugin-react": "^6.1.1",
     "concurrently": "^10.0.5",
     "tsx": "^4.23.13",
     "typescript": "^5.9.3",
     "vite": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

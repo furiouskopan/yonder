@@ -38,14 +38,18 @@ working offline (moving objects then drift slowly out of date).
 - **Solar system**: drag to orbit, wheel to zoom, right-drag to pan. Real orbit shapes for
   planets, dwarf planets, asteroids, comets and interstellar visitors, trajectories for
   spacecraft. Toggle between the compressed (logarithmic) and true scale.
-- **Full screen**: every panel has a ⛶ button; Esc leaves full screen.
+- **Full screen**: every panel has a ⛶ button; Esc leaves full screen. Esc also closes the
+  details panel, and table rows can be reached with Tab and selected with Enter.
+- **Live / Paused**: the toolbar button freezes the once-a-second updates (and the CPU they use)
+  until you resume.
+- **Theme**: System, Light or Dark from the toolbar; the map's default basemap follows it.
 - **Satellite sets**: choose from stations, navigation, communications, Earth observation,
   science, Starlink/OneWeb/Kuiper, military, CubeSats, recent launches, debris clouds, or all
   ~13,000 active satellites.
 - **Direction**: compass bearing for places on Earth; altitude above your horizon and compass
   azimuth for everything in the sky (green arrow = currently above the horizon).
 - **Links**: `?lat=&lon=&name=` sets the origin, `?map=3d` opens the globe, `?only=satellite`
-  shows one category, `?sats=active` picks a satellite set, `?select=sat-25544` selects an object.
+  shows one category, `?sats=active` picks a satellite set, `?select=sat-25544` selects an object, `?theme=dark` forces a theme.
 
 ## Development
 

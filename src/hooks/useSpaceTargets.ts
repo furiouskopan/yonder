@@ -34,9 +34,31 @@ function wikiFor(t: BodyTable): string {
   }
 }
 
+type Base = Omit<Target, "distanceKm">;
+
+const SOLAR_BASES: Base[] = SOLAR_BODIES.map((def) => ({
+  id: `sol-${def.name}`,
+  name: def.name,
+  category: "solar",
+  subtitle: def.kind,
+  key: norm(`${def.name} ${def.kind}`),
+  note: def.note,
+  kind: def.kind,
+  wiki: def.wiki,
+  facts: [["Radius", `${def.radiusKm.toLocaleString()} km`], ...(def.periodDays ? [["Orbital period", def.periodDays < 400 ? `${def.periodDays} days` : `${(def.periodDays / 365.25).toFixed(1)} years`] as [string, string]] : [])],
+}));
+
+function horizonsBase(t: BodyTable): Base {
+  const category: Category = t.kind === "probe" ? "probe" : "solar";
+  const subtitle = t.kind === "moon" ? `Moon of ${t.parent}` : KIND_LABELS[t.kind];
+  return { id: `hz-${t.id}`, name: t.name, category, subtitle, key: norm(`${t.name} ${subtitle}`), kind: t.kind, wiki: wikiFor(t), wiki2: t.name, facts: t.facts };
+}
+
 /** Sun, Moon, planets (local math) plus every Horizons body, recomputed every tick. */
 export function useSpaceTargets(now: number, origin: Origin, tables: BodyTable[]): SpaceResult {
   const prev = useRef(new Map<string, { d: number; t: number }>());
+  // The constant part of every target (names, search keys, facts) is built once per table set.
+  const hzBases = useMemo(() => tables.map(horizonsBase), [tables]);
 
   return useMemo(() => {
     const time = makeTime(now);
@@ -54,32 +76,17 @@ export function useSpaceTargets(now: number, origin: Origin, tables: BodyTable[]
     };
 
     const targets: Target[] = [];
-    for (const def of SOLAR_BODIES) {
+    for (let i = 0; i < SOLAR_BODIES.length; i++) {
+      const def = SOLAR_BODIES[i];
+      const base = SOLAR_BASES[i];
       const s = solarBodyState(def, time, observer);
-      const id = `sol-${def.name}`;
-      targets.push({
-        id,
-        name: def.name,
-        category: "solar",
-        subtitle: def.kind,
-        key: norm(`${def.name} ${def.kind}`),
-        distanceKm: s.distKm,
-        rateKms: rateOf(id, s.distKm),
-        altDeg: s.alt,
-        azDeg: s.az,
-        helio: s.helio ?? undefined,
-        note: def.note,
-        kind: def.kind,
-        wiki: def.wiki,
-        facts: [["Radius", `${def.radiusKm.toLocaleString()} km`], ...(def.periodDays ? [["Orbital period", def.periodDays < 400 ? `${def.periodDays} days` : `${(def.periodDays / 365.25).toFixed(1)} years`] as [string, string]] : [])],
-      });
+      targets.push({ ...base, distanceKm: s.distKm, rateKms: rateOf(base.id, s.distKm), altDeg: s.alt, azDeg: s.az, helio: s.helio ?? undefined });
     }
 
-    for (const t of tables) {
-      const id = `hz-${t.id}`;
-      const category: Category = t.kind === "probe" ? "probe" : "solar";
-      const subtitle = t.kind === "moon" ? `Moon of ${t.parent}` : KIND_LABELS[t.kind];
-      const base = { id, name: t.name, category, subtitle, key: norm(`${t.name} ${subtitle}`), kind: t.kind, wiki: wikiFor(t), wiki2: t.name, facts: t.facts };
+    for (let i = 0; i < tables.length; i++) {
+      const t = tables[i];
+      const base = hzBases[i];
+      const id = base.id;
       const g = interpolate(t, now);
       if (!g) {
         targets.push({
@@ -104,5 +111,5 @@ export function useSpaceTargets(now: number, origin: Origin, tables: BodyTable[]
       });
     }
     return { targets, earthHelio };
-  }, [now, origin.lat, origin.lon, origin.alt, tables]);
+  }, [now, origin.lat, origin.lon, origin.alt, tables, hzBases]);
 }

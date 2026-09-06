@@ -18,10 +18,24 @@ export interface DescriptionState {
 
 const cache = new Map<string, Promise<Described>>();
 
+/** What to ask Wikipedia for. Cities, towns and airports carry no hint string; theirs is derived here from the fields they already have. */
 export function describeQuery(t: Target): { q: string; fallback?: string } | null {
   if (t.category === "aircraft") return null;
-  const q = t.wiki ?? t.name;
-  return { q, fallback: t.wiki2 };
+  if (t.wiki) return { q: t.wiki, fallback: t.wiki2 };
+  switch (t.category) {
+    case "city":
+    case "town":
+    case "capital": {
+      const country = t.subtitle?.replace(/^Capital of /, "");
+      return country ? { q: `${t.name}, ${country}`, fallback: t.name } : { q: t.name };
+    }
+    case "airport": {
+      const place = t.note?.includes(",") ? t.note.split(",")[0] : undefined;
+      return { q: t.name, fallback: place ? `${t.name} ${place}` : undefined };
+    }
+    default:
+      return { q: t.name, fallback: t.wiki2 };
+  }
 }
 
 export function fetchDescription(spec: { q: string; fallback?: string }): Promise<Described> {

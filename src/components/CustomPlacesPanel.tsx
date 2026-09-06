@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { memo, useState, type FormEvent } from "react";
 import type { CustomPlace, Origin } from "../types";
 import type { PlacesStatus } from "../hooks/useCustomPlaces";
 
@@ -11,7 +11,7 @@ interface Props {
   origin: Origin;
 }
 
-export default function CustomPlacesPanel({ places, onAdd, onRemove, status, error, origin }: Props) {
+export default memo(function CustomPlacesPanel({ places, onAdd, onRemove, status, error, origin }: Props) {
   const [name, setName] = useState("");
   const [lat, setLat] = useState("");
   const [lon, setLon] = useState("");
@@ -80,4 +80,4 @@ export default function CustomPlacesPanel({ places, onAdd, onRemove, status, err
       </div>
     </details>
   );
-}
+});
