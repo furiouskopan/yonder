@@ -47,6 +47,12 @@ working offline (moving objects then drift slowly out of date).
 - **Links**: `?lat=&lon=&name=` sets the origin, `?map=3d` opens the globe, `?only=satellite`
   shows one category, `?sats=active` picks a satellite set, `?select=sat-25544` selects an object.
 
+## Development
+
+- `CLAUDE.md` — conventions, commands and performance rules for anyone (or any agent) editing the code.
+- `docs/ARCHITECTURE.md` — how data flows from the external services through the server and the
+  client hooks into the table, map, globe and Solar System views.
+
 ## Data sources
 
 | Data | Source | Refresh |
