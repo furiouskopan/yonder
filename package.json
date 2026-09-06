@@ -1,0 +1,39 @@
+{
+  "name": "yonder",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "How far is everything from here: live distances from your location to cities, landmarks, satellites, planets, probes, and stars.",
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c blue,green \"tsx watch server/index.ts\" \"vite\"",
+    "build": "tsc -p tsconfig.json && vite build",
+    "start": "tsx server/index.ts",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.server.json",
+    "data": "python scripts/build_data.py"
+  },
+  "dependencies": {
+    "@types/three": "^0.185.4",
+    "astronomy-engine": "^2.1.19",
+    "compression": "^1.8.1",
+    "express": "^5.2.1",
+    "globe.gl": "^2.46.2",
+    "leaflet": "^1.9.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "satellite.js": "^7.1.0",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/compression": "^1.8.1",
+    "@types/express": "^5.0.6",
+    "@types/leaflet": "^1.9.22",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.2"
+  }
+}

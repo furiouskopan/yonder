@@ -1,0 +1,18 @@
+{
+  "places": [
+    {
+      "id": "example-1",
+      "name": "Mount Olympus",
+      "lat": 40.0855,
+      "lon": 22.3583,
+      "note": "Example entry. Edit or delete it in the app or in data/custom-places.json."
+    },
+    {
+      "id": "example-2",
+      "name": "Matka Canyon",
+      "lat": 41.9508,
+      "lon": 21.295,
+      "note": "Example entry. Edit or delete it in the app or in data/custom-places.json."
+    }
+  ]
+}
