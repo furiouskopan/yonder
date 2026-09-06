@@ -1526,3 +1526,34 @@ body.resizing-row .splitter.row::after {
   inset: 0;
   pointer-events: none;
 }
+
+/* Keep the side panels usable when the detail panel is open on a short window. */
+.detail {
+  max-height: 36vh;
+  flex: 0 1 auto;
+}
+
+.side {
+  overflow-y: auto;
+}
+
+.side .pane:not(.collapsed) {
+  min-height: 170px;
+}
+
+.g-menu .icon-btn {
+  padding: 3px 8px;
+  font-size: 12px;
+  background: rgba(15, 23, 42, 0.78);
+  color: #e5e7eb;
+  border-color: #334155;
+}
+
+.g-menu .menu-pop {
+  min-width: 210px;
+}
+
+.g-menu .g-size input {
+  margin-left: auto;
+  width: 90px;
+}

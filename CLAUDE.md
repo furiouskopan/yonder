@@ -120,6 +120,8 @@ to fill Horizons tables in the background while the app is already usable.
   fraction between its two DOM siblings, and `App` turns `layout` into the `--cols` grid variable
   and the side column's flex values. The table's visible columns come from `prefs.columns` and are
   rendered through the `--cols` variable on `.table`.
+- Basemaps: CARTO's free tiles now return "API KEY REQUIRED" watermarks, so the dark and light
+  basemaps are Esri's World Dark/Light Gray canvases (base + reference labels, max zoom 16).
 - Horizons body ids: negative numbers are spacecraft, `NNN;` is a small-body record number,
   `DES=...;CAP;` selects a comet's current apparition (falls back without `CAP;`).
 - The satellite set "active" is ~13k objects. It works, but everything that touches satellite

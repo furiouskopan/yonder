@@ -10,6 +10,7 @@ import type { Origin, Target } from "../types";
 import { CATEGORY_BY_ID } from "../types";
 import { formatDistance, type Unit } from "../lib/units";
 import type { GlobePrefs } from "../hooks/usePrefs";
+import Menu from "./Menu";
 
 interface Props {
   origin: Origin;
@@ -400,26 +401,29 @@ export default function GlobeView(props: Props) {
         <button type="button" onClick={() => onPrefs({ texture: NEXT_TEXTURE[prefs.texture] })} title="Cycle the Earth texture">
           {TEXTURE_LABEL[prefs.texture]}
         </button>
-        <span className="g-sep" />
-        <button type="button" className={prefs.sats ? "on" : ""} aria-pressed={prefs.sats} onClick={() => onPrefs({ sats: !prefs.sats })}>
-          Satellites {satCount.toLocaleString()}
-        </button>
-        <button type="button" className={prefs.aircraft ? "on" : ""} aria-pressed={prefs.aircraft} onClick={() => onPrefs({ aircraft: !prefs.aircraft })}>
-          Aircraft {airCount}
-        </button>
-        <button type="button" className={prefs.places ? "on" : ""} aria-pressed={prefs.places} onClick={() => onPrefs({ places: !prefs.places })}>
-          Places
-        </button>
-        <button type="button" className={prefs.track ? "on" : ""} aria-pressed={prefs.track} onClick={() => onPrefs({ track: !prefs.track })} title="Orbit path of the selected satellite (or the ISS)">
-          Orbit path
-        </button>
-        <button type="button" className={prefs.labels ? "on" : ""} aria-pressed={prefs.labels} onClick={() => onPrefs({ labels: !prefs.labels })}>
-          Label
-        </button>
-        <label className="g-size" title="Dot size">
-          Size
-          <input type="range" min={0.4} max={3} step={0.1} value={prefs.pointSize} onChange={(e) => onPrefs({ pointSize: Number(e.target.value) })} />
-        </label>
+        <Menu label="Layers ▾" align="left" className="g-menu" title="Choose what the globe shows">
+          <div className="menu-title">Show</div>
+          <label className="menu-item">
+            <input type="checkbox" checked={prefs.sats} onChange={(e) => onPrefs({ sats: e.target.checked })} /> Satellites <span className="count">{satCount.toLocaleString()}</span>
+          </label>
+          <label className="menu-item">
+            <input type="checkbox" checked={prefs.aircraft} onChange={(e) => onPrefs({ aircraft: e.target.checked })} /> Aircraft <span className="count">{airCount}</span>
+          </label>
+          <label className="menu-item">
+            <input type="checkbox" checked={prefs.places} onChange={(e) => onPrefs({ places: e.target.checked })} /> Places on the ground
+          </label>
+          <label className="menu-item" title="Orbit path of the selected satellite (or the ISS)">
+            <input type="checkbox" checked={prefs.track} onChange={(e) => onPrefs({ track: e.target.checked })} /> Orbit path
+          </label>
+          <label className="menu-item">
+            <input type="checkbox" checked={prefs.labels} onChange={(e) => onPrefs({ labels: e.target.checked })} /> Origin label
+          </label>
+          <div className="menu-sep" />
+          <label className="menu-item g-size" title="Dot size">
+            Dot size
+            <input type="range" min={0.4} max={3} step={0.1} value={prefs.pointSize} onChange={(e) => onPrefs({ pointSize: Number(e.target.value) })} />
+          </label>
+        </Menu>
       </div>
       {tip && tipTarget && (
         <div className="solar-tip" style={{ left: tip.x + 14, top: tip.y + 14 }}>

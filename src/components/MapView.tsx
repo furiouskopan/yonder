@@ -32,25 +32,27 @@ interface Props {
 interface Basemap {
   label: string;
   url: string;
+  labelsUrl?: string; // a second tile layer with place names, drawn above the base
   attribution: string;
   maxZoom: number;
   subdomains?: string;
 }
 
 export const BASEMAPS: Record<string, Basemap> = {
+  // CARTO's free tiles started returning "API KEY REQUIRED" watermarks; Esri's canvases need no key.
   dark: {
     label: "Dark",
-    url: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-    maxZoom: 20,
-    subdomains: "abcd",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+    labelsUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
+    attribution: "Tiles &copy; Esri, HERE, Garmin, OpenStreetMap contributors",
+    maxZoom: 16,
   },
   light: {
     label: "Light",
-    url: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-    maxZoom: 20,
-    subdomains: "abcd",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+    labelsUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
+    attribution: "Tiles &copy; Esri, HERE, Garmin, OpenStreetMap contributors",
+    maxZoom: 16,
   },
   osm: {
     label: "OpenStreetMap",
@@ -123,7 +125,7 @@ export default function MapView(props: Props) {
   const divRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const originRef = useRef<L.Marker | null>(null);
-  const baseLayers = useRef<Record<string, L.TileLayer>>({});
+  const baseLayers = useRef<Record<string, L.Layer>>({});
   const layers = useRef<{ earth: L.LayerGroup; sats: L.LayerGroup; air: L.LayerGroup; track: L.LayerGroup; focus: L.LayerGroup } | null>(null);
   const earthMarkers = useRef(new Map<string, L.CircleMarker>());
   const satMarkers = useRef(new Map<string, L.CircleMarker>());
@@ -168,10 +170,12 @@ export default function MapView(props: Props) {
     const el = divRef.current;
     if (!el) return;
     const map = L.map(el, { worldCopyJump: true, minZoom: 1, zoomControl: true, preferCanvas: true }).setView([origin.lat, origin.lon], 3);
-    const bases: Record<string, L.TileLayer> = {};
-    const control: Record<string, L.TileLayer> = {};
+    const bases: Record<string, L.Layer> = {};
+    const control: Record<string, L.Layer> = {};
     for (const [id, b] of Object.entries(BASEMAPS)) {
-      bases[id] = L.tileLayer(b.url, { maxZoom: b.maxZoom, attribution: b.attribution, subdomains: b.subdomains ?? "abc", updateWhenIdle: true, keepBuffer: 3 });
+      const opts = { maxZoom: b.maxZoom, subdomains: b.subdomains ?? "abc", updateWhenIdle: true, keepBuffer: 3 };
+      const base = L.tileLayer(b.url, { ...opts, attribution: b.attribution });
+      bases[id] = b.labelsUrl ? L.layerGroup([base, L.tileLayer(b.labelsUrl, { ...opts, pane: "shadowPane" })]) : base;
       control[b.label] = bases[id];
     }
     baseLayers.current = bases;
