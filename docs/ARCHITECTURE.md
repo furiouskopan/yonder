@@ -111,20 +111,30 @@ may mutate a `Target`.
   recreated, and restyled only when they cross the horizon. Tooltips are functions evaluated when
   shown, reading the latest target from a per-id map. Popups fetch a Wikipedia blurb lazily.
 - **GlobeView** — globe.gl (three.js). Satellites, Earth places and aircraft are three
-  `THREE.Points` layers whose position/colour buffers are rewritten in place each tick. Picking
-  uses a raycaster against those layers. Rendering pauses while the tab is hidden. Lazy-loaded;
-  only mounted in 3D mode.
-- **SolarSystem3D** — plain three.js with OrbitControls and CSS2D labels. Planets are meshes,
-  everything else is one `Points` cloud. The scene is (re)built only when the set of bodies, the
-  orbit data or the scale changes; the per-second update writes positions into the existing
-  meshes and buffers through per-body handles. Orbit shapes come from `/api/orbits`: conic paths
-  from osculating elements for small bodies, sampled trajectories for spacecraft, and locally
-  sampled orbits for the planets (resampled hourly). Two scales: logarithmic (default) and linear.
+  `THREE.Points` layers whose position/colour buffers are rewritten in place each tick. The buffers
+  are allocated with spare capacity and only grow (disposing the geometry first) with
+  `setDrawRange` marking the live count; picking uses a raycaster against the visible layers.
+  A toolbar toggles layers, auto-rotation, the day/night texture and dot size (`prefs.globe`); a
+  `webglcontextlost` listener shows a rebuild button instead of a black canvas. Rendering pauses
+  while the tab is hidden. Lazy-loaded; only mounted in 3D mode.
+- **SolarSystem3D** — plain three.js with OrbitControls and CSS2D labels. Planets are textured,
+  lit `MeshStandardMaterial` spheres (Solar System Scope maps, loaded lazily and cached across
+  rebuilds) inside a tilt group and a spin group: Earth turns with the real Greenwich sidereal
+  angle, the others at their sidereal rates; Saturn carries a ring mesh with a radial UV map. The
+  Sun is an emissive sphere with an additive glow sprite, the Milky Way a back-face sphere. All
+  other bodies are one `Points` cloud. The scene is (re)built only when the set of bodies, the
+  orbit data, the kind filters or the scale changes; the per-second update writes positions into
+  the existing meshes and buffers through per-body handles. Orbit shapes come from `/api/orbits`:
+  conic paths from osculating elements for small bodies, sampled trajectories for spacecraft, and
+  locally sampled orbits for the planets (resampled hourly). Orbit lines are pickable: hovering
+  one names its body and brightens it, clicking selects. `prefs.solar` holds the kind filters,
+  orbit/trail/label/background toggles and the scale (logarithmic or linear).
 
 ## Preferences and theme
 
-`usePrefs` persists origin, units, category toggles, satellite set, map mode, basemap and theme
-(`auto` | `light` | `dark`) in `localStorage`. `index.html` applies the saved theme to
+`usePrefs` persists origin, units, category toggles, satellite set, map mode, basemap, theme
+(`auto` | `light` | `dark`), the panel layout (column split, side split, collapsed panels, pane
+order), the visible table columns and the globe and solar-system view options in `localStorage`. `index.html` applies the saved theme to
 `<html data-theme>` before the bundle loads so there is no flash; `App.useTheme` keeps it in sync
 with the system setting while on `auto`. The clock can be paused from the toolbar, which freezes
 every per-second computation.
@@ -139,8 +149,8 @@ upstream:
 | --- | --- | --- | --- |
 | `celestrak.ts` | `/api/satellites/sets`, `/api/satellites/:set` | `data/cache/celestrak-<group>.json` | 6 h; stale copy served on failure |
 | `satcat.ts` | (used by celestrak) | `satcat.json` | 7 d |
-| `horizons.ts` | `/api/horizons` | `horizons-<id>.json`, `horizons-moons.json`, `cneos-cad.json` | 48 h tables refreshed when <12 h remain; lists 12 h; 3-wide pool |
-| `orbits.ts` | `/api/orbits` | `orbit-<id>.json` | 30 d (7 d for flybys); 2-wide pool |
+| `horizons.ts` | `/api/horizons` | `horizons-<id>.json`, `horizons-moons.json`, `cneos-cad.json` | 48 h tables refreshed when <12 h remain; lists 12 h; 2-wide pool |
+| `orbits.ts` | `/api/orbits` | `orbit-<id>.json` | 30 d (7 d for flybys); one at a time, never while tables refresh |
 | `poi.ts` | `/api/poi?lat&lon` | `poi-<cell>.json` | 7 d per 0.02° cell |
 | `aircraft.ts` | `/api/aircraft?lat&lon&nm` | in memory | 8 s |
 | `describe.ts` | `/api/describe?q&fallback` | `describe.json` (flushed every 60 s) | never expires |

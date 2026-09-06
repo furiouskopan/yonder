@@ -34,11 +34,19 @@ working offline (moving objects then drift slowly out of date).
   toggles, popups with descriptions, aircraft with headings, the ground track of the selected
   satellite (or the ISS). Hovering a marker highlights its row and vice versa.
 - **3D globe**: switch with the 2D/3D control. Every tracked satellite orbits at its real height,
-  cyan when above your horizon; aircraft in yellow; places as dots. Click a dot for details.
-- **Solar system**: drag to orbit, wheel to zoom, right-drag to pan. Real orbit shapes for
-  planets, dwarf planets, asteroids, comets and interstellar visitors, trajectories for
-  spacecraft. Toggle between the compressed (logarithmic) and true scale.
-- **Full screen**: every panel has a ⛶ button; Esc leaves full screen. Esc also closes the
+  cyan when above your horizon; aircraft in yellow; places as dots. Click a dot for details. The
+  toolbar flies back to the origin, auto-rotates, switches day/night textures, toggles layers and
+  sets the dot size.
+- **Solar system**: drag to orbit, wheel to zoom (towards the cursor), right-drag to pan.
+  Textured, sunlit planets with their real tilts and rotation, Saturn's rings and the Milky Way
+  behind. Real orbit shapes for planets, dwarf planets, asteroids, comets and interstellar
+  visitors, trajectories for spacecraft; hover an orbit to see whose it is, click it for details.
+  Options filter by kind, hide orbits, trails, labels or the background, and switch between the
+  compressed (logarithmic) and true scale; Focus flies the camera to the selected body.
+- **Panels**: drag the bars between panels to resize them (double-click resets), minimise any
+  panel with – and bring it back from its header or the Layout menu, swap the map and solar
+  system, and pick which table columns to show with Columns. Every panel has a ⛶ full-screen
+  button; Esc leaves full screen. Esc also closes the
   details panel, and table rows can be reached with Tab and selected with Enter.
 - **Live / Paused**: the toolbar button freezes the once-a-second updates (and the CPU they use)
   until you resume.
@@ -73,6 +81,7 @@ working offline (moving objects then drift slowly out of date).
 | Exoplanets | NASA Exoplanet Archive | offline bundle |
 | Stars (magnitude ≤ 6.5) | HYG database v4.1 (CC BY-SA 4.0) | offline bundle |
 | Descriptions | Wikipedia REST API | cached |
+| Planet textures | Solar System Scope (CC BY 4.0), via Wikimedia Commons | bundled |
 
 `server/` is a small Express app that proxies and caches the external APIs (CelesTrak and Overpass
 do not allow browser cross-origin requests) and stores your places in `data/custom-places.json`.

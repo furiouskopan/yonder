@@ -39,7 +39,7 @@ src/                 React 19 + TypeScript client (Vite)
 server/              Express 5 API: proxies and caches external services, stores custom places
 scripts/             build_data.py (datasets), check-math.mjs
 public/data/         Offline bundles built by build_data.py (committed, ~17 MB)
-public/textures/     Globe textures
+public/textures/     Globe textures; planets/ holds the Solar System Scope planet maps (CC BY 4.0)
 data/cache/          Runtime cache written by the server (git-ignored)
 data/raw/            Downloads used by build_data.py (git-ignored)
 data/custom-places.json   The user's own places, editable by hand
@@ -81,7 +81,9 @@ The client holds ~320k targets in memory and re-renders once a second. Keep thes
 - The distance table is virtualised (`DistanceTable.tsx`, fixed 44 px rows). It receives a row
   accessor, not a materialised array of every visible row.
 - The 3D scenes rebuild geometry only when the set of objects changes; per-second updates write
-  into existing buffers.
+  into existing buffers. Point layers in `GlobeView` allocate with spare capacity and use
+  `setDrawRange`; when they must grow, dispose the geometry first. Replacing attributes without
+  disposing leaked GPU memory on every count change and eventually lost the WebGL context.
 - Avoid `Intl.NumberFormat` construction in render paths; the formatters in `lib/units.ts` are
   cached.
 - Do not add formatted strings to the 300k static targets (notes, Wikipedia hints, fact lists).
@@ -111,7 +113,13 @@ to fill Horizons tables in the background while the app is already usable.
   Field order is defined in `scripts/build_data.py` and read positionally in `useStaticData.ts`.
 - `dist/` is git-ignored. `npm start` without a build serves a plain-text hint instead of the app.
 - Prefs persist in `localStorage` under `yonder:prefs`; the URL parameters `?lat=&lon=&name=`,
-  `?map=`, `?only=`, `?sats=`, `?select=` override them for the session.
+  `?map=`, `?only=`, `?sats=`, `?select=` override them for the session. Nested preference
+  objects (`layout`, `columns`, `globe`, `solar`) are deep-merged with their defaults in `load()`,
+  so adding a field only needs a default.
+- Panels: `Pane` is controlled (collapsed state lives in `prefs.layout`), `Splitter` reports the
+  fraction between its two DOM siblings, and `App` turns `layout` into the `--cols` grid variable
+  and the side column's flex values. The table's visible columns come from `prefs.columns` and are
+  rendered through the `--cols` variable on `.table`.
 - Horizons body ids: negative numbers are spacecraft, `NNN;` is a small-body record number,
   `DES=...;CAP;` selects a comet's current apparition (falls back without `CAP;`).
 - The satellite set "active" is ~13k objects. It works, but everything that touches satellite

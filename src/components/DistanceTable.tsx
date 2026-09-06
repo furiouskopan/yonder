@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, type ReactElement } from "react";
 import type { Origin, SortState, Target } from "../types";
 import { CATEGORY_BY_ID } from "../types";
 import { chordKm, compass, initialBearing } from "../lib/geo";
@@ -6,9 +6,12 @@ import { formatDistance, formatLightTime, formatRate, type Unit } from "../lib/u
 import { noteOf } from "../lib/target";
 import type { SkyFn } from "../lib/sky";
 import type { RowSource } from "../lib/merge";
+import type { ColumnId } from "../hooks/usePrefs";
 
 const ROW_H = 44;
 const OVERSCAN = 8;
+
+type Cols = Record<ColumnId, boolean>;
 
 interface Props {
   rows: RowSource;
@@ -21,6 +24,21 @@ interface Props {
   onHover: (id: string | null) => void;
   sort: SortState;
   onSort: (s: SortState) => void;
+  columns: Cols;
+}
+
+/** CSS grid template for the visible columns. Name and distance are always present. */
+export function templateFor(c: Cols): string {
+  const parts: string[] = [];
+  if (c.rank) parts.push("44px");
+  parts.push("minmax(160px, 2.2fr)");
+  if (c.type) parts.push("120px");
+  parts.push("minmax(120px, 1fr)");
+  if (c.light) parts.push("90px");
+  if (c.direction) parts.push("120px");
+  if (c.approach) parts.push("100px");
+  if (c.details) parts.push("minmax(140px, 2fr)");
+  return parts.join(" ");
 }
 
 export function directionOf(t: Target, origin: Origin, sky: SkyFn | null): { text: string; cls: string } {
@@ -48,14 +66,15 @@ interface RowProps {
   sky: SkyFn | null;
   selected: boolean;
   hovered: boolean;
+  columns: Cols;
   onSelect: (id: string | null) => void;
   onHover: (id: string | null) => void;
   top: number;
 }
 
-const Row = memo(function Row({ t, i, unit, origin, sky, selected, hovered, onSelect, onHover, top }: RowProps) {
+const Row = memo(function Row({ t, i, unit, origin, sky, selected, hovered, columns, onSelect, onHover, top }: RowProps) {
   const cat = CATEGORY_BY_ID[t.category];
-  const dir = directionOf(t, origin, sky);
+  const dir = columns.direction ? directionOf(t, origin, sky) : null;
   const rateCls = t.rateKms === undefined ? "" : t.rateKms < 0 ? "closer" : "farther";
   const chord = t.lat !== undefined && cat.realm === "earth" && t.distanceKm > 500 ? `straight line ${formatDistance(chordKm(t.distanceKm), unit)}` : "";
   const details = [noteOf(t), chord].filter(Boolean).join(" · ");
@@ -78,7 +97,7 @@ const Row = memo(function Row({ t, i, unit, origin, sky, selected, hovered, onSe
       tabIndex={0}
       title={details}
     >
-      <span className="c-rank">{i + 1}</span>
+      {columns.rank && <span className="c-rank">{i + 1}</span>}
       <span className="c-name">
         <span className="name">
           {t.name}
@@ -90,21 +109,23 @@ const Row = memo(function Row({ t, i, unit, origin, sky, selected, hovered, onSe
         </span>
         {t.subtitle && <span className="sub">{t.subtitle}</span>}
       </span>
-      <span className="c-cat">
-        <span className="pill" style={{ ["--chip" as string]: cat.color }}>
-          {cat.label}
+      {columns.type && (
+        <span className="c-cat">
+          <span className="pill" style={{ ["--chip" as string]: cat.color }}>
+            {cat.label}
+          </span>
         </span>
-      </span>
+      )}
       <span className="c-dist num">{formatDistance(t.distanceKm, unit)}</span>
-      <span className="c-light num muted">{formatLightTime(t.distanceKm)}</span>
-      <span className={`c-dir ${dir.cls}`}>{dir.text}</span>
-      <span className={`c-rate num ${rateCls}`}>{formatRate(t.rateKms)}</span>
-      <span className="c-note muted">{details}</span>
+      {columns.light && <span className="c-light num muted">{formatLightTime(t.distanceKm)}</span>}
+      {dir && <span className={`c-dir ${dir.cls}`}>{dir.text}</span>}
+      {columns.approach && <span className={`c-rate num ${rateCls}`}>{formatRate(t.rateKms)}</span>}
+      {columns.details && <span className="c-note muted">{details}</span>}
     </div>
   );
 });
 
-export default function DistanceTable({ rows, unit, origin, sky, selectedId, hoverId, onSelect, onHover, sort, onSort }: Props) {
+export default function DistanceTable({ rows, unit, origin, sky, selectedId, hoverId, onSelect, onHover, sort, onSort, columns }: Props) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [height, setHeight] = useState(600);
@@ -137,7 +158,7 @@ export default function DistanceTable({ rows, unit, origin, sky, selectedId, hov
 
   const start = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
   const end = Math.min(rows.length, Math.ceil((scrollTop + height) / ROW_H) + OVERSCAN);
-  const rendered: React.ReactElement[] = [];
+  const rendered: ReactElement[] = [];
   for (let i = start; i < end; i++) {
     const t = rows.at(i);
     rendered.push(
@@ -151,6 +172,7 @@ export default function DistanceTable({ rows, unit, origin, sky, selectedId, hov
         sky={t.ra !== undefined ? sky : null}
         selected={t.id === selectedId}
         hovered={t.id === hoverId}
+        columns={columns}
         onSelect={onSelect}
         onHover={onHover}
         top={i * ROW_H}
@@ -175,16 +197,16 @@ export default function DistanceTable({ rows, unit, origin, sky, selectedId, hov
   };
 
   return (
-    <div className="table" role="grid" aria-rowcount={rows.length}>
+    <div className="table" role="grid" aria-rowcount={rows.length} style={{ ["--cols" as string]: templateFor(columns) }}>
       <div className="thead" role="row">
-        <span className="c-rank">#</span>
+        {columns.rank && <span className="c-rank">#</span>}
         {head("name", "Name", "c-name")}
-        <span className="c-cat">Type</span>
+        {columns.type && <span className="c-cat">Type</span>}
         {head("distance", "Distance", "c-dist")}
-        <span className="c-light">Light time</span>
-        <span className="c-dir">Direction</span>
-        <span className="c-rate">Approach</span>
-        <span className="c-note">Details</span>
+        {columns.light && <span className="c-light">Light time</span>}
+        {columns.direction && <span className="c-dir">Direction</span>}
+        {columns.approach && <span className="c-rate">Approach</span>}
+        {columns.details && <span className="c-note">Details</span>}
       </div>
       <div className="tbody" ref={bodyRef} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
         <div className="tspacer" style={{ height: rows.length * ROW_H }}>

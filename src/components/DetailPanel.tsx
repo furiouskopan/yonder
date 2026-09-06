@@ -13,13 +13,15 @@ interface Props {
   unit: Unit;
   sky: SkyFn | null;
   description: DescriptionState;
+  /** Facts computed elsewhere (e.g. orbit elements) shown after the target's own facts. */
+  extraFacts?: [string, string][];
   onClose: () => void;
   onSetOrigin: (lat: number, lon: number, name: string) => void;
 }
 
 const nf0 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 
-export default function DetailPanel({ target: t, origin, unit, sky, description, onClose, onSetOrigin }: Props) {
+export default function DetailPanel({ target: t, origin, unit, sky, description, extraFacts, onClose, onSetOrigin }: Props) {
   const cat = CATEGORY_BY_ID[t.category];
   const dir = directionOf(t, origin, sky);
   const d = t.distanceKm;
@@ -41,6 +43,7 @@ export default function DetailPanel({ target: t, origin, unit, sky, description,
   if (t.heightKm !== undefined && t.category === "satellite") facts.push(["Height", `${nf0.format(Math.round(t.heightKm))} km`]);
   if (t.ra !== undefined && t.dec !== undefined) facts.push(["RA / Dec (J2000)", `${(t.ra / 15).toFixed(2)} h, ${t.dec.toFixed(2)}°`]);
   if (t.facts) facts.push(...t.facts);
+  if (extraFacts) facts.push(...extraFacts);
   const note = noteOf(t);
   if (note && !t.facts?.some(([, v]) => v === note)) facts.push(["Notes", note]);
 
