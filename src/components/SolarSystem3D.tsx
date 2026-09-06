@@ -219,7 +219,8 @@ const setLineOpacity = (line: THREE.Line | null, factor: number) => {
 };
 
 export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit, now, prefs, onPrefs, onSelect, onHover }: Props) {
-  const wrapRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null); // sized wrapper that also holds the overlays
+  const mountRef = useRef<HTMLDivElement>(null); // the renderer's canvas and label layer live here
   const sceneRef = useRef<Scene | null>(null);
   const propsRef = useRef({ items, onSelect, onHover, unit });
   propsRef.current = { items, onSelect, onHover, unit };
@@ -239,16 +240,17 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
   // Scene setup (again after a lost context).
   useEffect(() => {
     const el = wrapRef.current;
-    if (!el) return;
+    const mount = mountRef.current;
+    if (!el || !mount) return;
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.setSize(el.clientWidth, el.clientHeight);
     renderer.domElement.className = "s3d-canvas";
-    el.appendChild(renderer.domElement);
+    mount.appendChild(renderer.domElement);
     const labels = new CSS2DRenderer();
     labels.setSize(el.clientWidth, el.clientHeight);
     labels.domElement.className = "s3d-labels";
-    el.appendChild(labels.domElement);
+    mount.appendChild(labels.domElement);
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(45, el.clientWidth / Math.max(1, el.clientHeight), 0.05, 6000);
@@ -410,7 +412,7 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
       renderer.domElement.removeEventListener("webglcontextlost", onLost);
       controls.dispose();
       renderer.dispose();
-      el.innerHTML = "";
+      mount.innerHTML = "";
       sceneRef.current = null;
       setReady(false);
     };
@@ -666,6 +668,7 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
 
   return (
     <div className="solar3d" ref={wrapRef} role="application" aria-label="Solar system">
+      <div className="s3d-mount" ref={mountRef} />
       <div className={`s3d-options${optionsOpen ? " open" : ""}`}>
         <button type="button" className="s3d-opt-toggle" onClick={() => setOptionsOpen((o) => !o)} aria-expanded={optionsOpen}>
           ⚙ Options {optionsOpen ? "▴" : "▾"}

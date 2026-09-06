@@ -117,7 +117,8 @@ const NEXT_TEXTURE: Record<GlobePrefs["texture"], GlobePrefs["texture"]> = { aut
 
 export default function GlobeView(props: Props) {
   const { origin, earthRows, sats, aircraft, selected, hoverId, track, trackHeightKm, unit, dark, prefs, onPrefs } = props;
-  const divRef = useRef<HTMLDivElement>(null);
+  const divRef = useRef<HTMLDivElement>(null); // sized wrapper that also holds the overlays
+  const mountRef = useRef<HTMLDivElement>(null); // globe.gl wipes and owns this element
   const globeRef = useRef<GlobeT | null>(null);
   const layersRef = useRef<{ sats: Layer; earth: Layer; air: Layer } | null>(null);
   const highlightRef = useRef<THREE.Mesh | null>(null);
@@ -139,8 +140,9 @@ export default function GlobeView(props: Props) {
   // Create the globe (again after a lost context, when `epoch` changes).
   useEffect(() => {
     const el = divRef.current;
-    if (!el) return;
-    const globe = new Globe(el, { animateIn: false, rendererConfig: { antialias: true, alpha: true, powerPreference: "high-performance" } });
+    const mount = mountRef.current;
+    if (!el || !mount) return;
+    const globe = new Globe(mount, { animateIn: false, rendererConfig: { antialias: true, alpha: true, powerPreference: "high-performance" } });
     globe
       .globeImageUrl(propsRef.current.prefs.texture === "night" || (propsRef.current.prefs.texture === "auto" && propsRef.current.dark) ? "/textures/earth-night.jpg" : "/textures/earth-day.jpg")
       .bumpImageUrl("/textures/earth-topology.png")
@@ -272,6 +274,7 @@ export default function GlobeView(props: Props) {
         (layer.points.material as THREE.Material).dispose();
       }
       globe._destructor();
+      mount.innerHTML = "";
       globeRef.current = null;
       layersRef.current = null;
       setReady(false);
@@ -386,6 +389,7 @@ export default function GlobeView(props: Props) {
 
   return (
     <div className="globe" ref={divRef} role="application" aria-label="Globe">
+      <div className="globe-mount" ref={mountRef} />
       <div className="g-toolbar">
         <button type="button" onClick={() => flyTo(origin.lat, origin.lon, 1.8)} title="Fly back to the origin">
           ◎ Origin

@@ -1513,3 +1513,16 @@ body.resizing-row .splitter.row::after {
   background: var(--accent);
   opacity: 1;
 }
+
+/* The 3D libraries own these elements (globe.gl wipes its mount's contents); React overlays are siblings. */
+.globe-mount,
+.s3d-mount {
+  position: absolute;
+  inset: 0;
+}
+
+.s3d-mount .s3d-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
