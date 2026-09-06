@@ -2,7 +2,7 @@
 // (drawn as ellipses or hyperbolae in the browser) and sampled heliocentric trajectories for
 // spacecraft. Ecliptic J2000 frame, AU. Refreshed monthly and cached on disk.
 import { readCache, writeCache, sleep } from "./cache";
-import { allBodies, extractCsvRows, fmtUtc, horizonsQuery, jdToMs, runPool, type HorizonsBody } from "./horizons";
+import { allBodies, extractCsvRows, fmtUtc, horizonsQuery, isRefreshing, jdToMs, runPool, type HorizonsBody } from "./horizons";
 
 export interface OrbitElements {
   epochJd: number;
@@ -131,6 +131,8 @@ export function loadOrbitsFromDisk(): void {
 
 export function ensureOrbitsRefresh(): Promise<void> {
   if (refreshing) return refreshing;
+  // Never run alongside the position-table refresh: Horizons rate-limits parallel clients with 503s.
+  if (isRefreshing()) return Promise.resolve();
   refreshing = (async () => {
     loadOrbitsFromDisk();
     const now = Date.now();
@@ -142,7 +144,7 @@ export function ensureOrbitsRefresh(): Promise<void> {
     });
     if (stale.length === 0) return;
     console.log(`[orbits] refreshing ${stale.length} orbits`);
-    await runPool(stale, 2, async (b) => {
+    await runPool(stale, 1, async (b) => {
       try {
         const info: OrbitInfo = { id: b.id, name: b.name, kind: b.kind, status: "ok", fetchedAt: Date.now() };
         if (ELEMENT_KINDS.has(b.kind)) info.elements = await fetchElements(b, now);

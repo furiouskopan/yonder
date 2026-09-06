@@ -188,7 +188,7 @@ const SPAN_H = 48;
 const LEAD_H = 12;
 const RETRY_MS = 30 * 60e3;
 const LISTS_TTL_MS = 12 * 3600e3;
-const CONCURRENCY = 3;
+const CONCURRENCY = 2; // Horizons answers 503 when hit with more parallel requests
 const TDB_MINUS_UTC_MS = 69_184; // TT − UTC in 2026 (37 s of leap seconds + 32.184 s)
 
 const tables = new Map<string, BodyTable>();
@@ -381,6 +381,8 @@ export async function runPool<T>(items: T[], size: number, fn: (item: T) => Prom
   };
   await Promise.all(Array.from({ length: Math.min(size, items.length) }, worker));
 }
+
+export const isRefreshing = (): boolean => refreshing !== null;
 
 export function ensureRefresh(): Promise<void> {
   if (refreshing) return refreshing;

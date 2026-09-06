@@ -95,7 +95,7 @@ The client holds ~320k targets in memory and re-renders once a second. Keep thes
 | Service | Used for | Cache | Notes |
 | --- | --- | --- | --- |
 | CelesTrak GP + SATCAT | Satellite elements and catalog facts | 6 h / 7 d on disk | Do not fetch a group more than once per 2 h |
-| NASA/JPL Horizons | Probes, moons, small bodies (48 h vector tables), orbit elements | daily / monthly on disk | 3 concurrent requests max, 150 ms between them |
+| NASA/JPL Horizons | Probes, moons, small bodies (48 h vector tables), orbit elements | daily / monthly on disk | 2 concurrent table requests, 150 ms apart; orbit fetches run one at a time and never while tables refresh (more parallelism gets 503s) |
 | CNEOS close-approach API | This month's near-Earth flybys | daily | |
 | Overpass (OSM) | Places of interest within 22 km | 7 d per 2 km cell | Slow; four mirrors tried in turn |
 | adsb.fi / adsb.lol | Live aircraft | 8 s in memory | Browser polls every 10 s |
