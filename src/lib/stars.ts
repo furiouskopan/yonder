@@ -23,13 +23,24 @@ const CONSTELLATIONS: Record<string, string> = {
 
 const byDistance = (a: Target, b: Target): number => a.distanceKm - b.distanceKm;
 
+// Catalogue entries that duplicate a curated deep-sky object are skipped: by Messier number or by common name.
+const CURATED_MESSIER = new Set<number>();
+const CURATED_NAMES = new Set<string>();
+for (const o of DEEP_SKY) {
+  const m = /\(M(\d+)\)|^Messier (\d+)/.exec(o.name);
+  if (m) CURATED_MESSIER.add(Number(m[1] ?? m[2]));
+  CURATED_NAMES.add(norm(o.name.replace(/\s*\(.*\)$/, "")));
+}
+
 /**
- * Fixed-distance targets: Solar System regions, the curated deep-sky list, naked-eye stars and
- * exoplanets, sorted by distance. Built once per dataset arrival; distances never change.
+ * Fixed-distance targets: Solar System regions, the curated deep-sky list, naked-eye stars,
+ * exoplanets and the NGC/IC deep-sky catalogue, sorted by distance. Built once per dataset
+ * arrival; distances never change.
  * Star rows: name, ra, dec, ly, mag, con, spect, named. Exoplanet rows: name, host, ly, year,
  * method, radiusEarth, massEarth, periodDays, ra, dec, planets.
+ * Deep-sky rows: name, kind, ra, dec, ly, mag, con, wiki, approx, messier, common.
  */
-export function buildFixedTargets(starRows: DataRow[] | null, exoRows: DataRow[] | null): Target[] {
+export function buildFixedTargets(starRows: DataRow[] | null, exoRows: DataRow[] | null, dsoRows: DataRow[] | null): Target[] {
   const out: Target[] = SOLAR_REGIONS.map((r, i) => ({
     id: `region-${i}`,
     name: r.name,
@@ -70,6 +81,7 @@ export function buildFixedTargets(starRows: DataRow[] | null, exoRows: DataRow[]
       kind: o.kind,
       ra,
       dec,
+      mag: j !== undefined && starRows ? (starRows[j][4] as number) : undefined,
       wiki: o.wiki ?? o.name,
     });
   });
@@ -94,6 +106,7 @@ export function buildFixedTargets(starRows: DataRow[] | null, exoRows: DataRow[]
         ra: s[1] as number,
         dec: s[2] as number,
         kind: "Star",
+        mag,
         note: `magnitude ${mag.toFixed(1)}${spect ? ` · ${spect}` : ""}`,
         facts: [
           ["Apparent magnitude", mag.toFixed(2)],
@@ -140,6 +153,34 @@ export function buildFixedTargets(starRows: DataRow[] | null, exoRows: DataRow[]
         ],
         wiki: name,
         wiki2: host,
+      });
+    }
+  }
+  if (dsoRows) {
+    for (let i = 0; i < dsoRows.length; i++) {
+      const r = dsoRows[i];
+      const messier = (r[9] as number) || 0;
+      const common = (r[10] as string) || "";
+      if ((messier && CURATED_MESSIER.has(messier)) || (common && CURATED_NAMES.has(norm(common)))) continue;
+      const name = r[0] as string;
+      const kind = r[1] as string;
+      const conCode = (r[6] as string) || "";
+      const con = CONSTELLATIONS[conCode] ?? conCode;
+      const mag = r[5] as number | null;
+      out.push({
+        id: `ngc-${i}`,
+        name,
+        category: "star",
+        subtitle: con ? `${kind} in ${con}` : kind,
+        key: norm(`${name} ${common} ${kind} ${conCode}`),
+        distanceKm: (r[4] as number) * KM_PER_LY,
+        approx: r[8] === 1,
+        ra: r[2] as number,
+        dec: r[3] as number,
+        kind,
+        mag: mag ?? undefined,
+        note: mag !== null ? `magnitude ${mag.toFixed(1)}` : undefined,
+        wiki: (r[7] as string) || name,
       });
     }
   }

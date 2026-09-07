@@ -7,6 +7,8 @@ export type Category =
   | "airport"
   | "custom"
   | "aircraft"
+  | "ship"
+  | "train"
   | "satellite"
   | "solar"
   | "probe"
@@ -31,6 +33,8 @@ export const CATEGORIES: CategoryInfo[] = [
   { id: "airport", label: "Airports", color: "#8b5cf6", realm: "earth" },
   { id: "custom", label: "My places", color: "#f59e0b", realm: "earth" },
   { id: "aircraft", label: "Aircraft", color: "#eab308", realm: "air" },
+  { id: "ship", label: "Ships", color: "#0ea5e9", realm: "earth" },
+  { id: "train", label: "Trains", color: "#84cc16", realm: "earth" },
   { id: "satellite", label: "Satellites", color: "#06b6d4", realm: "space" },
   { id: "solar", label: "Solar system", color: "#f97316", realm: "space" },
   { id: "probe", label: "Spacecraft", color: "#ec4899", realm: "space" },
@@ -75,6 +79,9 @@ export interface Target {
   heading?: number; // aircraft track, degrees
   speedKms?: number;
   helio?: Vec3; // heliocentric ecliptic J2000 position, AU
+  parent?: string; // moons: the body they orbit
+  rel?: Vec3; // moons: offset from the parent, ecliptic J2000, AU
+  mag?: number; // apparent magnitude (stars, deep-sky objects)
   approx?: boolean;
   note?: string;
   pop?: number; // population; formatted on demand (see lib/target.ts noteOf)

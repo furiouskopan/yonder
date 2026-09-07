@@ -25,7 +25,7 @@ export interface CountryRow {
   continent: string;
 }
 
-export type DatasetName = "cities" | "towns" | "airports" | "exoplanets" | "stars";
+export type DatasetName = "cities" | "towns" | "airports" | "exoplanets" | "stars" | "deepsky";
 
 const AIRPORT_TYPES: Record<string, string> = {
   large_airport: "Major airport",
@@ -107,7 +107,7 @@ function airportTarget(r: DataRow, i: number, c: Countries): Target {
 
 export function useStaticData(): { data: StaticData | null; loading: DatasetName[]; error: string | null } {
   const [data, setData] = useState<StaticData | null>(null);
-  const [loading, setLoading] = useState<DatasetName[]>(["cities", "towns", "airports", "exoplanets", "stars"]);
+  const [loading, setLoading] = useState<DatasetName[]>(["cities", "towns", "airports", "exoplanets", "stars", "deepsky"]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -150,7 +150,7 @@ export function useStaticData(): { data: StaticData | null; loading: DatasetName
             note: ct.continent,
           });
         }
-        setData({ earth: cities, fixed: buildFixedTargets(null, null), countryNames: k.names });
+        setData({ earth: cities, fixed: buildFixedTargets(null, null, null), countryNames: k.names });
         done("cities");
 
         // The big optional datasets load afterwards and appear as they arrive.
@@ -172,7 +172,8 @@ export function useStaticData(): { data: StaticData | null; loading: DatasetName
 
         let starRows: DataRow[] | null = null;
         let exoRows: DataRow[] | null = null;
-        const rebuildFixed = () => patch((d) => ({ ...d, fixed: buildFixedTargets(starRows, exoRows) }));
+        let dsoRows: DataRow[] | null = null;
+        const rebuildFixed = () => patch((d) => ({ ...d, fixed: buildFixedTargets(starRows, exoRows, dsoRows) }));
         void getJson<{ rows: DataRow[] }>("/data/exoplanets.json")
           .then((x) => {
             if (!live) return;
@@ -189,6 +190,14 @@ export function useStaticData(): { data: StaticData | null; loading: DatasetName
           })
           .catch((e: Error) => console.warn(e.message))
           .finally(() => done("stars"));
+        void getJson<{ rows: DataRow[] }>("/data/deepsky.json")
+          .then((x) => {
+            if (!live) return;
+            dsoRows = x.rows;
+            rebuildFixed();
+          })
+          .catch((e: Error) => console.warn(e.message))
+          .finally(() => done("deepsky"));
       } catch (e) {
         if (live) setError((e as Error).message);
       }

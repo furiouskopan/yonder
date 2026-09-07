@@ -18,9 +18,11 @@ interface Props {
   earthRows: Target[];
   satRows: Target[];
   airRows: Target[];
+  vehRows: Target[]; // ships and trains
   selected: Target | null;
   hoverId: string | null;
   track: [number, number][] | null;
+  footprint: [number, number][] | null; // ground area from which the tracked satellite is visible
   unit: Unit;
   basemap: string;
   dark: boolean;
@@ -79,6 +81,9 @@ const SAT_DOWN = "#0e7490";
 const PLANE_SVG =
   '<svg viewBox="0 0 24 24" width="20" height="20"><path fill="#eab308" stroke="#1f2937" stroke-width="0.7" d="M21 16v-2l-8-5V3.5A1.5 1.5 0 0 0 11.5 2 1.5 1.5 0 0 0 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/></svg>';
 
+const SHIP_SVG = '<svg viewBox="0 0 24 24" width="16" height="16"><path fill="#0ea5e9" stroke="#0c4a6e" stroke-width="1" d="M12 2 L19 21 L12 16.5 L5 21 Z"/></svg>';
+const TRAIN = "#84cc16";
+
 const radiusFor = (t: Target): number => (t.category === "satellite" ? 4 : t.category === "city" || t.category === "town" ? 3 : t.category === "airport" ? 3.5 : 5);
 
 function esc(s: string): string {
@@ -121,17 +126,19 @@ function popupContent(t: Target, unit: Unit, onSelect: (id: string) => void, onO
 }
 
 export default function MapView(props: Props) {
-  const { origin, earthRows, satRows, airRows, selected, hoverId, track, unit, basemap, dark } = props;
+  const { origin, earthRows, satRows, airRows, vehRows, selected, hoverId, track, footprint, unit, basemap, dark } = props;
   const divRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const originRef = useRef<L.Marker | null>(null);
   const baseLayers = useRef<Record<string, L.Layer>>({});
-  const layers = useRef<{ earth: L.LayerGroup; sats: L.LayerGroup; air: L.LayerGroup; track: L.LayerGroup; focus: L.LayerGroup } | null>(null);
+  const layers = useRef<{ earth: L.LayerGroup; sats: L.LayerGroup; air: L.LayerGroup; veh: L.LayerGroup; track: L.LayerGroup; focus: L.LayerGroup } | null>(null);
   const earthMarkers = useRef(new Map<string, L.CircleMarker>());
   const satMarkers = useRef(new Map<string, L.CircleMarker>());
   const satUp = useRef(new Map<string, boolean>());
   const airMarkers = useRef(new Map<string, L.Marker>());
   const airSvg = useRef(new Map<string, SVGElement>());
+  const vehMarkers = useRef(new Map<string, L.Marker | L.CircleMarker>());
+  const vehSvg = useRef(new Map<string, SVGElement>());
   /** Latest Target per marker id; tooltips and popups read from here so they always show current numbers. */
   const latest = useRef(new Map<string, Target>());
   const highlighted = useRef<string | null>(null);
@@ -142,7 +149,7 @@ export default function MapView(props: Props) {
     const t = latest.current.get(id);
     if (!t) return "";
     const u = propsRef.current.unit;
-    const extra = t.category === "satellite" ? ` · ${Math.round(t.heightKm ?? 0)} km up` : t.category === "aircraft" ? ` · ${noteOf(t) ?? ""}` : "";
+    const extra = t.category === "satellite" ? ` · ${Math.round(t.heightKm ?? 0)} km up` : t.category === "aircraft" || t.category === "ship" || t.category === "train" ? ` · ${noteOf(t) ?? ""}` : "";
     return `${t.name} · ${formatDistance(t.distanceKm, u)}${extra}`;
   };
 
@@ -186,9 +193,10 @@ export default function MapView(props: Props) {
     const trackL = L.layerGroup().addTo(map);
     const sats = L.layerGroup().addTo(map);
     const air = L.layerGroup().addTo(map);
+    const veh = L.layerGroup().addTo(map);
     const focus = L.layerGroup().addTo(map);
-    layers.current = { earth, sats, air, track: trackL, focus };
-    L.control.layers(control, { Places: earth, Satellites: sats, Aircraft: air, "Ground track": trackL }, { position: "topright" }).addTo(map);
+    layers.current = { earth, sats, air, veh, track: trackL, focus };
+    L.control.layers(control, { Places: earth, Satellites: sats, Aircraft: air, "Ships & trains": veh, "Satellite track": trackL }, { position: "topright" }).addTo(map);
     map.on("baselayerchange", (e: L.LayersControlEvent) => {
       const id = Object.entries(bases).find(([, layer]) => layer === e.layer)?.[0];
       if (id) propsRef.current.onBasemap(id);
@@ -216,6 +224,8 @@ export default function MapView(props: Props) {
       satUp.current.clear();
       airMarkers.current.clear();
       airSvg.current.clear();
+      vehMarkers.current.clear();
+      vehSvg.current.clear();
       latest.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -331,14 +341,61 @@ export default function MapView(props: Props) {
     }
   }, [airRows]);
 
+  // Ships (rotated hull icons) and trains (dots), dead-reckoned every second.
+  useEffect(() => {
+    const layer = layers.current?.veh;
+    if (!layer) return;
+    const seen = new Set<string>();
+    for (const t of vehRows) {
+      if (t.lat === undefined || t.lon === undefined) continue;
+      seen.add(t.id);
+      latest.current.set(t.id, t);
+      let m = vehMarkers.current.get(t.id);
+      if (!m) {
+        if (t.category === "ship") {
+          const icon = L.divIcon({ className: "ship-icon", html: SHIP_SVG, iconSize: [16, 16], iconAnchor: [8, 8] });
+          m = L.marker([t.lat, t.lon], { icon, zIndexOffset: 400 });
+        } else {
+          m = L.circleMarker([t.lat, t.lon], { radius: 4, color: TRAIN, fillColor: TRAIN, fillOpacity: 0.9, weight: 1 });
+        }
+        m.on("click", (e: L.LeafletMouseEvent) => {
+          L.DomEvent.stopPropagation(e);
+          openPopup(t.id, t, e.latlng);
+        });
+        m.on("mouseover", () => propsRef.current.onHover(t.id));
+        m.on("mouseout", () => propsRef.current.onHover(null));
+        m.bindTooltip(tipFor(t.id));
+        layer.addLayer(m);
+        vehMarkers.current.set(t.id, m);
+        if (m instanceof L.Marker) {
+          const svg = m.getElement()?.querySelector("svg");
+          if (svg) vehSvg.current.set(t.id, svg);
+        }
+      } else {
+        m.setLatLng([t.lat, t.lon]);
+      }
+      const svg = vehSvg.current.get(t.id);
+      if (svg) svg.style.transform = `rotate(${t.heading ?? 0}deg)`;
+    }
+    for (const [id, m] of vehMarkers.current) {
+      if (!seen.has(id)) {
+        layer.removeLayer(m);
+        vehMarkers.current.delete(id);
+        vehSvg.current.delete(id);
+        latest.current.delete(id);
+      }
+    }
+  }, [vehRows]);
+
   // Hover sync from the table.
   useEffect(() => {
     const style = (id: string | null, on: boolean) => {
       if (!id) return;
-      const cm = earthMarkers.current.get(id) ?? satMarkers.current.get(id);
+      const vm = vehMarkers.current.get(id);
+      const cm = earthMarkers.current.get(id) ?? satMarkers.current.get(id) ?? (vm instanceof L.CircleMarker ? vm : undefined);
       const t = latest.current.get(id);
       if (cm && t) cm.setStyle({ weight: on ? 3 : 1, radius: on ? 8 : radiusFor(t) });
-      const am = airMarkers.current.get(id);
+      const am = airMarkers.current.get(id) ?? (vm instanceof L.Marker ? vm : undefined);
       am?.getElement()?.classList.toggle("hovered", on);
     };
     style(highlighted.current, false);
@@ -376,14 +433,16 @@ export default function MapView(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
 
-  // Ground track of the selected satellite (or the ISS).
+  // Ground track and visibility footprint of the selected satellite (or the ISS).
   useEffect(() => {
     const layer = layers.current?.track;
     if (!layer) return;
     layer.clearLayers();
-    if (!track || track.length < 2) return;
-    for (const seg of splitAtDateline(track)) L.polyline(seg, { color: SAT_UP, weight: 1.5, opacity: 0.7, dashArray: "4 4" }).addTo(layer);
-  }, [track]);
+    if (track && track.length >= 2) for (const seg of splitAtDateline(track)) L.polyline(seg, { color: SAT_UP, weight: 1.5, opacity: 0.7, dashArray: "4 4" }).addTo(layer);
+    if (footprint && footprint.length > 2) {
+      for (const seg of splitAtDateline(footprint)) L.polyline(seg, { color: "#f59e0b", weight: 1.2, opacity: 0.75, dashArray: "2 5" }).bindTooltip("Where this satellite is above the horizon right now").addTo(layer);
+    }
+  }, [track, footprint]);
 
   // Basemap chosen elsewhere (restored preference), or the theme changed while on "auto".
   useEffect(() => {

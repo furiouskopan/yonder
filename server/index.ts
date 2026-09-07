@@ -9,6 +9,8 @@ import { getHorizonsTables, ensureRefresh, refreshLists } from "./horizons";
 import { ensureOrbitsRefresh, getOrbits } from "./orbits";
 import { getPois } from "./poi";
 import { getAircraft } from "./aircraft";
+import { getShips } from "./ships";
+import { getTrains } from "./trains";
 import { describe, flushDescriptions } from "./describe";
 import { readCustomPlaces, writeCustomPlaces } from "./customPlaces";
 
@@ -73,6 +75,34 @@ app.get("/api/aircraft", async (req, res) => {
   try {
     res.setHeader("Cache-Control", "no-store");
     res.json(await getAircraft(lat, lon, nm));
+  } catch (err) {
+    res.status(502).json({ error: (err as Error).message });
+  }
+});
+
+app.get("/api/ships", (req, res) => {
+  const lat = num(req.query.lat, -90, 90);
+  const lon = num(req.query.lon, -180, 180);
+  const km = num(req.query.km, 10, 1000) ?? 500;
+  if (lat === null || lon === null) {
+    res.status(400).json({ error: "lat and lon are required" });
+    return;
+  }
+  res.setHeader("Cache-Control", "no-store");
+  res.json(getShips(lat, lon, km));
+});
+
+app.get("/api/trains", async (req, res) => {
+  const lat = num(req.query.lat, -90, 90);
+  const lon = num(req.query.lon, -180, 180);
+  const km = num(req.query.km, 10, 40000) ?? 40000;
+  if (lat === null || lon === null) {
+    res.status(400).json({ error: "lat and lon are required" });
+    return;
+  }
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await getTrains(lat, lon, km));
   } catch (err) {
     res.status(502).json({ error: (err as Error).message });
   }

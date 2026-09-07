@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Origin, Target } from "../types";
 import { norm } from "../lib/search";
+import type { Pass } from "../lib/passes";
 
 export interface SatSetInfo {
   id: string;
@@ -141,6 +142,7 @@ export function useSatellites(now: number, origin: Origin, setId: string) {
   const prevRef = useRef<{ t: number; dist: Float32Array } | null>(null);
   const busyRef = useRef(false);
   const trackWaiters = useRef(new Map<number, (pts: [number, number][]) => void>());
+  const passWaiters = useRef(new Map<number, (passes: Pass[]) => void>());
   const [targets, setTargets] = useState<Target[]>([]);
   const [state, setState] = useState<SatState>({ status: "idle", count: 0 });
   const [sets, setSets] = useState<SatSetInfo[]>([]);
@@ -159,6 +161,7 @@ export function useSatellites(now: number, origin: Origin, setId: string) {
       const m = e.data as
         | { type: "result"; gen: number; t: number; data: Float32Array }
         | { type: "track"; norad: number; points: [number, number][] }
+        | { type: "passes"; norad: number; passes: Pass[] }
         | { type: "loaded"; gen: number; count: number };
       if (m.type === "result") {
         busyRef.current = false;
@@ -194,6 +197,12 @@ export function useSatellites(now: number, origin: Origin, setId: string) {
         if (cb) {
           trackWaiters.current.delete(m.norad);
           cb(m.points);
+        }
+      } else if (m.type === "passes") {
+        const cb = passWaiters.current.get(m.norad);
+        if (cb) {
+          passWaiters.current.delete(m.norad);
+          cb(m.passes);
         }
       } else if (m.type === "loaded") {
         if (m.gen === genRef.current) setState((s) => ({ ...s, status: "ready", count: m.count }));
@@ -287,5 +296,16 @@ export function useSatellites(now: number, origin: Origin, setId: string) {
     });
   }, []);
 
-  return { targets, state, sets, trackOf };
+  /** Passes over the current origin in the next `hours`, found in the worker at `stepSec` resolution. */
+  const passesOf = useCallback((targetId: string, t: number, hours = 24, minEl = 0, stepSec = 15): Promise<Pass[]> => {
+    const norad = Number(targetId.replace("sat-", ""));
+    const index = metaRef.current.findIndex((m) => m.norad === norad);
+    if (index < 0 || !workerRef.current) return Promise.resolve([]);
+    return new Promise((resolve) => {
+      passWaiters.current.set(norad, resolve);
+      workerRef.current?.postMessage({ type: "passes", index, norad, t, hours, stepSec, minEl });
+    });
+  }, []);
+
+  return { targets, state, sets, trackOf, passesOf };
 }

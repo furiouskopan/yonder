@@ -8,6 +8,7 @@ export type DeepSkyKind =
   | "Galaxy"
   | "Galaxy cluster"
   | "Quasar"
+  | "Pulsar"
   | "Cosmic horizon";
 
 export interface DeepSkyObject {
@@ -80,6 +81,28 @@ export const DEEP_SKY: DeepSkyObject[] = [
   { name: "TON 618", ly: 10400000000, kind: "Quasar", note: "One of the most massive black holes known", approx: true, ra: 188.093, dec: 31.573 },
   { name: "GN-z11", ly: 13400000000, kind: "Galaxy", note: "Light-travel distance; now ~32 billion ly away", approx: true, ra: 189.106, dec: 62.242 },
   { name: "JADES-GS-z14-0", ly: 13500000000, kind: "Galaxy", note: "Most distant confirmed galaxy (2024)", approx: true, ra: 53.083, dec: -27.822 },
+  // Pulsars and magnetars (J2000 names encode their coordinates; distances from dispersion measures, so approximate).
+  { name: "PSR J0437−4715", ly: 510, kind: "Pulsar", note: "Nearest millisecond pulsar · spins 174 times a second", approx: true, ra: 69.316, dec: -47.253, wiki: "PSR J0437−4715" },
+  { name: "Geminga", ly: 815, kind: "Pulsar", note: "Radio-quiet gamma-ray pulsar", approx: true, ra: 98.476, dec: 17.771 },
+  { name: "Vela Pulsar", ly: 960, kind: "Pulsar", note: "Brightest pulsar at radio wavelengths · 11 rotations a second", approx: true, ra: 128.836, dec: -45.176 },
+  { name: "PSR B1919+21", ly: 1000, kind: "Pulsar", note: "The first pulsar ever discovered (1967)", approx: true, ra: 290.255, dec: 21.897, wiki: "PSR B1919+21" },
+  { name: "PSR B1257+12 (Lich)", ly: 2300, kind: "Pulsar", note: "Hosts the first exoplanets ever found (1992)", approx: true, ra: 195.013, dec: 12.682, wiki: "PSR B1257+12" },
+  { name: "PSR B0329+54", ly: 3300, kind: "Pulsar", note: "One of the brightest northern pulsars", approx: true, ra: 53.248, dec: 54.579, wiki: "PSR B0329+54" },
+  { name: "PSR J0737−3039 (Double Pulsar)", ly: 3500, kind: "Pulsar", note: "The only known pair of pulsars orbiting each other", approx: true, ra: 114.464, dec: -30.661, wiki: "PSR J0737−3039" },
+  { name: "Crab Pulsar", ly: 6500, kind: "Pulsar", note: "Neutron star at the heart of the Crab Nebula · 30 rotations a second", approx: true, ra: 83.633, dec: 22.015 },
+  { name: "Black Widow Pulsar", ly: 6500, kind: "Pulsar", note: "Evaporating its companion star", approx: true, ra: 299.903, dec: 20.804, wiki: "Black Widow Pulsar" },
+  { name: "PSR J1748−2446ad", ly: 18000, kind: "Pulsar", note: "Fastest-spinning pulsar known · 716 rotations a second", approx: true, ra: 267.021, dec: -24.78, wiki: "PSR J1748−2446ad" },
+  { name: "Hulse–Taylor pulsar (PSR B1913+16)", ly: 21000, kind: "Pulsar", note: "First binary pulsar · indirect proof of gravitational waves", approx: true, ra: 288.867, dec: 16.107, wiki: "Hulse–Taylor pulsar" },
+  { name: "SGR 1806−20", ly: 50000, kind: "Pulsar", note: "Magnetar · its 2004 flare was the brightest ever seen from outside the Solar System", approx: true, ra: 272.164, dec: -20.411, wiki: "SGR 1806−20" },
+  // Quasars and blazars (light-travel distances from redshift, flat ΛCDM with H0 = 70).
+  { name: "Markarian 421", ly: 420000000, kind: "Quasar", note: "Blazar · one of the nearest, a bright gamma-ray source", approx: true, ra: 166.114, dec: 38.209 },
+  { name: "Markarian 501", ly: 460000000, kind: "Quasar", note: "Blazar · TeV gamma rays", approx: true, ra: 253.468, dec: 39.76 },
+  { name: "OJ 287", ly: 3500000000, kind: "Quasar", note: "Blazar with a 12-year cycle from a binary black hole", approx: true, ra: 133.704, dec: 20.109 },
+  { name: "3C 48", ly: 4000000000, kind: "Quasar", note: "First quasar to be identified (1960)", approx: true, ra: 24.422, dec: 33.16 },
+  { name: "3C 279", ly: 5300000000, kind: "Quasar", note: "Blazar with a jet that appears to move faster than light", approx: true, ra: 194.047, dec: -5.789 },
+  { name: "S5 0014+81", ly: 11700000000, kind: "Quasar", note: "Powered by a 40-billion-solar-mass black hole", approx: true, ra: 4.285, dec: 81.586 },
+  { name: "APM 08279+5255", ly: 12000000000, kind: "Quasar", note: "Gravitationally lensed · hosts a vast reservoir of water vapour", approx: true, ra: 127.924, dec: 52.755 },
+  { name: "ULAS J1342+0928", ly: 13100000000, kind: "Quasar", note: "One of the most distant quasars known, seen 690 million years after the Big Bang", approx: true, ra: 205.534, dec: 9.478 },
   { name: "Edge of the observable universe", ly: 46500000000, kind: "Cosmic horizon", note: "Comoving distance to the cosmic horizon", approx: true, wiki: "Observable universe" },
 ];
 

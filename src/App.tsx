@@ -2,7 +2,7 @@ import { Suspense, lazy, useCallback, useDeferredValue, useEffect, useMemo, useR
 import * as A from "astronomy-engine";
 import type { Category, SortState, Target } from "./types";
 import { CATEGORIES, CATEGORY_BY_ID } from "./types";
-import { ALL_ON, DEFAULT_LAYOUT, usePrefs, type ColumnId, type GlobePrefs, type LayoutPrefs, type PaneId, type SolarPrefs, type ThemePref } from "./hooks/usePrefs";
+import { ALL_ON, DEFAULT_LAYOUT, usePrefs, type ColumnId, type GlobePrefs, type LayoutPrefs, type PaneId, type SidePane, type SkyPrefs, type SolarPrefs, type ThemePref } from "./hooks/usePrefs";
 import { useClock } from "./hooks/useClock";
 import { useStaticData } from "./hooks/useStaticData";
 import { LANDMARK_TARGETS, useEarthTargets } from "./hooks/useEarthTargets";
@@ -12,6 +12,7 @@ import { usePoi } from "./hooks/usePoi";
 import { useSpaceTargets } from "./hooks/useSpaceTargets";
 import { useSatellites } from "./hooks/useSatellites";
 import { useAircraft } from "./hooks/useAircraft";
+import { SHIP_RADIUS_KM, useVehicles } from "./hooks/useVehicles";
 import { useCustomPlaces } from "./hooks/useCustomPlaces";
 import { useDescription } from "./hooks/useDescription";
 import { norm } from "./lib/search";
@@ -19,17 +20,20 @@ import { haversineKm } from "./lib/geo";
 import { makeSky } from "./lib/sky";
 import { comparatorFor, lazyIndex, mergeRows, sortByKey, sortStatic } from "./lib/merge";
 import { orbitFacts } from "./lib/orbitFacts";
+import { footprint as footprintOf, type PassSet } from "./lib/passes";
 import { EARTH_PERIOD_DAYS, SOLAR_BODIES, makeObserver, makeTime, orbitSamples } from "./lib/astro";
 import OriginPanel, { type SearchEntry } from "./components/OriginPanel";
 import Filters from "./components/Filters";
 import DistanceTable from "./components/DistanceTable";
 import MapView from "./components/MapView";
+import SkyView from "./components/SkyView";
 import DetailPanel from "./components/DetailPanel";
 import Pane from "./components/Pane";
 import Splitter from "./components/Splitter";
 import LayoutMenu from "./components/LayoutMenu";
 import ColumnsMenu from "./components/ColumnsMenu";
 import CustomPlacesPanel from "./components/CustomPlacesPanel";
+import Welcome from "./components/Welcome";
 import type { SolarItem } from "./components/SolarSystem3D";
 
 const GlobeView = lazy(() => import("./components/GlobeView"));
@@ -38,6 +42,7 @@ const SolarSystem3D = lazy(() => import("./components/SolarSystem3D"));
 const ISS_ID = "sat-25544";
 const EMPTY: Target[] = [];
 const MAP_SAT_LIMIT = 800;
+const DYNAMIC_ID = /^(sat|hz|sol|air|ship|train)-/;
 
 /** Resolved dark/light from the preference plus the system setting; also stamps <html data-theme>. */
 function useTheme(pref: ThemePref): boolean {
@@ -94,7 +99,7 @@ function countOf(list: Target[]): Counts {
 
 export default function App() {
   const [prefs, setPrefs] = usePrefs();
-  const { origin, unit, cats, satSet, pinOnClick, mapMode, basemap, theme, layout, columns, globe: globePrefs, solar: solarPrefs } = prefs;
+  const { origin, unit, cats, satSet, pinOnClick, mapMode, basemap, theme, layout, columns, onboarded, globe: globePrefs, solar: solarPrefs, sky: skyPrefs } = prefs;
   const [live, setLive] = useState(true);
   const now = useClock(1000, live);
   const dark = useTheme(theme);
@@ -109,11 +114,13 @@ export default function App() {
   const space = useSpaceTargets(now, origin, horizons.tables);
   const sats = useSatellites(now, origin, satSet);
   const air = useAircraft(now, origin, cats.aircraft);
+  const veh = useVehicles(now, origin, cats.ship, cats.train);
 
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortState>({ key: "distance", dir: "asc" });
   const [selectedId, setSelectedId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("select"));
   const [hoverId, setHoverId] = useState<string | null>(null);
+  const [pickHint, setPickHint] = useState(false);
 
   // ---- filtering ----
   // Typing stays responsive: the 320k-row filter runs on the deferred value, not on every keystroke.
@@ -127,7 +134,9 @@ export default function App() {
   const fixedFiltered = useMemo(() => filterList(fixed), [fixed, filterList]);
   const satRows = useMemo(() => filterList(sats.targets), [sats.targets, filterList]);
   const airRows = useMemo(() => filterList(air.targets), [air.targets, filterList]);
-  const dynamic = useMemo(() => [...space.targets, ...sats.targets, ...air.targets], [space.targets, sats.targets, air.targets]);
+  const vehicles = useMemo(() => (veh.ships.length || veh.trains.length ? veh.ships.concat(veh.trains) : EMPTY), [veh.ships, veh.trains]);
+  const vehRows = useMemo(() => filterList(vehicles), [vehicles, filterList]);
+  const dynamic = useMemo(() => [...space.targets, ...sats.targets, ...air.targets, ...vehicles], [space.targets, sats.targets, air.targets, vehicles]);
 
   // ---- table rows: a virtual merge of the static tier (sorted when the filter/sort changes) and the dynamic tier (sorted per tick) ----
   const cmp = useMemo(() => comparatorFor(sort), [sort]);
@@ -153,7 +162,7 @@ export default function App() {
 
   // ---- selection ----
   const selectedStatic = useMemo(
-    () => (selectedId && !/^(sat|hz|sol|air)-/.test(selectedId) ? (earth.find((t) => t.id === selectedId) ?? fixed.find((t) => t.id === selectedId) ?? null) : null),
+    () => (selectedId && !DYNAMIC_ID.test(selectedId) ? (earth.find((t) => t.id === selectedId) ?? fixed.find((t) => t.id === selectedId) ?? null) : null),
     [selectedId, earth, fixed],
   );
   const selectedDynamic = useMemo(() => (selectedId ? (dynamic.find((t) => t.id === selectedId) ?? null) : null), [selectedId, dynamic]);
@@ -217,6 +226,7 @@ export default function App() {
   const setOrigin = useCallback(
     (lat: number, lon: number, name?: string) => {
       setPrefs({ origin: { lat, lon, name: name ?? nearestName(lat, lon) } });
+      setPickHint(false);
     },
     [setPrefs, nearestName],
   );
@@ -242,6 +252,24 @@ export default function App() {
   const setColumns = useCallback((c: Record<ColumnId, boolean>) => setPrefs({ columns: c }), [setPrefs]);
   const setGlobePrefs = useCallback((patch: Partial<GlobePrefs>) => setPrefs((p) => ({ globe: { ...p.globe, ...patch } })), [setPrefs]);
   const setSolarPrefs = useCallback((patch: Partial<SolarPrefs>) => setPrefs((p) => ({ solar: { ...p.solar, ...patch } })), [setPrefs]);
+  const setSkyPrefs = useCallback((patch: Partial<SkyPrefs>) => setPrefs((p) => ({ sky: { ...p.sky, ...patch } })), [setPrefs]);
+  /** Splitter between two side panes: convert the reported fraction into their relative weights. */
+  const setSideSplit = useCallback(
+    (a: SidePane, b: SidePane, f: number | null) =>
+      setPrefs((p) => {
+        const w = { ...p.layout.weights };
+        if (f === null) {
+          w[a] = 1;
+          w[b] = 1;
+        } else {
+          const total = w[a] + w[b];
+          w[a] = Math.max(0.2, f * total);
+          w[b] = Math.max(0.2, (1 - f) * total);
+        }
+        return { layout: { ...p.layout, weights: w } };
+      }),
+    [setPrefs],
+  );
 
   // ---- rows for the map and the globe ----
   // Nearest Earth places, capped so landmarks and points of interest are not drowned out by towns.
@@ -263,7 +291,7 @@ export default function App() {
   );
   const mapSats = useMemo(() => (satRows.length > MAP_SAT_LIMIT ? satRows.slice(0, MAP_SAT_LIMIT) : satRows), [satRows]);
 
-  // Ground track for the selected satellite, or the ISS by default. Refreshed once a minute.
+  // Ground track and visibility footprint for the selected satellite, or the ISS by default. Track refreshed once a minute.
   const trackTargetId = selected?.category === "satellite" ? selected.id : sats.targets.some((t) => t.id === ISS_ID) ? ISS_ID : null;
   const trackTarget = trackTargetId ? sats.targets.find((t) => t.id === trackTargetId) : undefined;
   const trackMinute = Math.floor(now / 60_000);
@@ -285,6 +313,42 @@ export default function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trackTargetId, trackMinute, sats.state.count]);
+  // The footprint moves with the satellite; recomputed when it has moved about a quarter of a degree.
+  const fpKey = trackTarget?.subLat !== undefined && trackTarget.subLon !== undefined ? `${Math.round(trackTarget.subLat * 4)}|${Math.round(trackTarget.subLon * 4)}|${Math.round((trackTarget.heightKm ?? 0) / 25)}` : "";
+  const footprint = useMemo(
+    () => (trackTarget?.subLat !== undefined && trackTarget.subLon !== undefined ? footprintOf(trackTarget.subLat, trackTarget.subLon, trackTarget.heightKm ?? 400) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fpKey],
+  );
+
+  // Pass predictions for the selected satellite over the current origin, refreshed every ten minutes.
+  const [passes, setPasses] = useState<PassSet | null>(null);
+  const [passesLoading, setPassesLoading] = useState(false);
+  const selSatId = selected?.category === "satellite" ? selected.id : null;
+  const passTick = Math.floor(now / 600_000);
+  useEffect(() => {
+    if (!selSatId) {
+      setPasses(null);
+      return;
+    }
+    let cancelled = false;
+    setPassesLoading(true);
+    const at = Date.now();
+    sats
+      .passesOf(selSatId, at)
+      .then((ps) => {
+        if (cancelled) return;
+        setPasses({ id: selSatId, origin: `${origin.lat.toFixed(2)}°, ${origin.lon.toFixed(2)}°`, at, hours: 24, passes: ps });
+        setPassesLoading(false);
+      })
+      .catch(() => {
+        if (!cancelled) setPassesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selSatId, passTick, origin.lat, origin.lon, sats.state.count]);
 
   // ---- solar-system view data ----
   const hourKey = Math.floor(now / 3600e3);
@@ -301,7 +365,7 @@ export default function App() {
       { id: "earth", name: "Earth", pos: space.earthHelio, kind: "Planet", category: "solar", distanceKm: 0, orbit: planetOrbits.get("Earth"), radiusKm: 6371 },
     ];
     for (const t of space.targets) {
-      if (!t.helio || t.name === "Sun" || t.kind === "moon") continue;
+      if (!t.helio || t.name === "Sun") continue;
       const def = SOLAR_BODIES.find((d) => d.name === t.name);
       items.push({
         id: t.id,
@@ -313,6 +377,8 @@ export default function App() {
         orbit: planetOrbits.get(t.name),
         hzId: t.id.startsWith("hz-") ? t.id.slice(3) : undefined,
         radiusKm: def?.radiusKm,
+        parent: t.parent,
+        rel: t.rel,
       });
     }
     return items;
@@ -323,8 +389,8 @@ export default function App() {
   const loading = loadingSets.length > 0;
 
   // ---- layout ----
-  const { collapsed } = layout;
-  const sideClosed = collapsed.map && collapsed.solar;
+  const { collapsed, order, weights } = layout;
+  const sideClosed = order.every((id) => collapsed[id]);
   const mainStyle = wide
     ? ({
         ["--cols" as string]: collapsed.table
@@ -334,95 +400,155 @@ export default function App() {
             : `minmax(0, ${layout.split}fr) 8px minmax(360px, ${1 - layout.split}fr)`,
       } as React.CSSProperties)
     : undefined;
-  const paneOrder: PaneId[] = layout.solarFirst ? ["solar", "map"] : ["map", "solar"];
-  const [firstPane, secondPane] = paneOrder;
-  const sideFlex = (id: PaneId, index: 0 | 1): React.CSSProperties =>
-    collapsed[id] ? { flex: "0 0 auto" } : { flex: `${collapsed[index === 0 ? secondPane : firstPane] ? 1 : index === 0 ? layout.sideSplit : 1 - layout.sideSplit} 1 0%`, minHeight: 0 };
+  const openSide = order.filter((id) => !collapsed[id]);
+  // Open panes keep the stylesheet's min-height (the side column scrolls when the window is short).
+  const sideStyle = (id: SidePane): React.CSSProperties => (collapsed[id] ? { flex: "0 0 auto" } : { flex: `${openSide.length === 1 ? 1 : weights[id]} 1 0%` });
 
-  const mapPane = (
-    <Pane
-      key="map"
-      title={mapMode === "2d" ? "Map" : "Globe"}
-      className="map-pane"
-      collapsed={collapsed.map}
-      onCollapse={(v) => setCollapsed("map", v)}
-      style={sideFlex("map", paneOrder.indexOf("map") as 0 | 1)}
-      actions={
-        <div className="segmented" role="group" aria-label="Map mode">
-          <button type="button" className={mapMode === "2d" ? "on" : ""} aria-pressed={mapMode === "2d"} onClick={() => setPrefs({ mapMode: "2d" })}>
-            2D map
-          </button>
-          <button type="button" className={mapMode === "3d" ? "on" : ""} aria-pressed={mapMode === "3d"} onClick={() => setPrefs({ mapMode: "3d" })}>
-            3D globe
-          </button>
-        </div>
-      }
-    >
-      {mapMode === "2d" ? (
-        <MapView
-          origin={origin}
-          onOriginChange={setOrigin}
-          pinOnClick={pinOnClick}
-          earthRows={earthRows}
-          satRows={mapSats}
-          airRows={airRows}
-          selected={selected}
-          hoverId={hoverId}
-          track={track && track.id === trackTargetId ? track.points : null}
-          unit={unit}
-          basemap={basemap}
-          dark={dark}
-          onBasemap={onBasemap}
-          onSelect={setSelectedId}
-          onHover={setHoverId}
-        />
-      ) : (
-        <Suspense fallback={<div className="loading">Loading the globe…</div>}>
-          <GlobeView
+  const panes: Record<SidePane, React.ReactNode> = {
+    map: (
+      <Pane
+        key="map"
+        title={mapMode === "2d" ? "Map" : "Globe"}
+        className="map-pane"
+        collapsed={collapsed.map}
+        onCollapse={(v) => setCollapsed("map", v)}
+        style={sideStyle("map")}
+        actions={
+          <div className="segmented" role="group" aria-label="Map mode">
+            <button type="button" className={mapMode === "2d" ? "on" : ""} aria-pressed={mapMode === "2d"} onClick={() => setPrefs({ mapMode: "2d" })}>
+              2D map
+            </button>
+            <button type="button" className={mapMode === "3d" ? "on" : ""} aria-pressed={mapMode === "3d"} onClick={() => setPrefs({ mapMode: "3d" })}>
+              3D globe
+            </button>
+          </div>
+        }
+      >
+        {mapMode === "2d" ? (
+          <MapView
             origin={origin}
+            onOriginChange={setOrigin}
+            pinOnClick={pinOnClick}
             earthRows={earthRows}
-            sats={satRows}
-            aircraft={airRows}
+            satRows={mapSats}
+            airRows={airRows}
+            vehRows={vehRows}
             selected={selected}
             hoverId={hoverId}
             track={track && track.id === trackTargetId ? track.points : null}
-            trackHeightKm={trackHeightKm}
+            footprint={footprint}
             unit={unit}
+            basemap={basemap}
             dark={dark}
-            pinOnClick={pinOnClick}
-            prefs={globePrefs}
-            onPrefs={setGlobePrefs}
+            onBasemap={onBasemap}
             onSelect={setSelectedId}
             onHover={setHoverId}
-            onOriginChange={setOrigin}
           />
-        </Suspense>
-      )}
-    </Pane>
-  );
-  const solarPane = (
-    <Pane key="solar" title="Solar system" className="solar-pane" collapsed={collapsed.solar} onCollapse={(v) => setCollapsed("solar", v)} style={sideFlex("solar", paneOrder.indexOf("solar") as 0 | 1)}>
-      <Suspense fallback={<div className="loading">Loading the solar system…</div>}>
-        <SolarSystem3D
-          items={solarItems}
-          orbits={orbits}
-          selectedId={selectedId}
+        ) : (
+          <Suspense fallback={<div className="loading">Loading the globe…</div>}>
+            <GlobeView
+              origin={origin}
+              earthRows={earthRows}
+              sats={satRows}
+              aircraft={airRows}
+              vehicles={vehRows}
+              selected={selected}
+              hoverId={hoverId}
+              track={track && track.id === trackTargetId ? track.points : null}
+              footprint={footprint}
+              trackHeightKm={trackHeightKm}
+              unit={unit}
+              dark={dark}
+              pinOnClick={pinOnClick}
+              prefs={globePrefs}
+              onPrefs={setGlobePrefs}
+              onSelect={setSelectedId}
+              onHover={setHoverId}
+              onOriginChange={setOrigin}
+            />
+          </Suspense>
+        )}
+      </Pane>
+    ),
+    sky: (
+      <Pane key="sky" title="Sky" className="sky-pane" collapsed={collapsed.sky} onCollapse={(v) => setCollapsed("sky", v)} style={sideStyle("sky")}>
+        <SkyView
+          now={now}
+          origin={origin}
+          fixed={fixed}
+          bodies={space.targets}
+          sats={sats.targets}
+          aircraft={air.targets}
+          selected={selected}
           hoverId={hoverId}
           unit={unit}
-          now={now}
-          prefs={solarPrefs}
-          onPrefs={setSolarPrefs}
+          dark={dark}
+          prefs={skyPrefs}
+          onPrefs={setSkyPrefs}
           onSelect={setSelectedId}
           onHover={setHoverId}
         />
-      </Suspense>
-    </Pane>
-  );
-  const sidePanes = layout.solarFirst ? [solarPane, mapPane] : [mapPane, solarPane];
+      </Pane>
+    ),
+    solar: (
+      <Pane key="solar" title="Solar system" className="solar-pane" collapsed={collapsed.solar} onCollapse={(v) => setCollapsed("solar", v)} style={sideStyle("solar")}>
+        <Suspense fallback={<div className="loading">Loading the solar system…</div>}>
+          <SolarSystem3D
+            items={solarItems}
+            orbits={orbits}
+            selectedId={selectedId}
+            hoverId={hoverId}
+            unit={unit}
+            now={now}
+            prefs={solarPrefs}
+            onPrefs={setSolarPrefs}
+            onSelect={setSelectedId}
+            onHover={setHoverId}
+          />
+        </Suspense>
+      </Pane>
+    ),
+  };
+  const sideChildren: React.ReactNode[] = [];
+  order.forEach((id, i) => {
+    sideChildren.push(panes[id]);
+    const next = order[i + 1];
+    if (next && !collapsed[id] && !collapsed[next]) {
+      sideChildren.push(
+        <Splitter key={`split-${id}-${next}`} direction="row" onChange={(f) => setSideSplit(id, next, f)} onReset={() => setSideSplit(id, next, null)} min={0.15} max={0.85} label={`Resize the ${id} and ${next} panels`} />,
+      );
+    }
+  });
+
+  const vehicleStatus = (label: string, st: typeof veh.shipState, radius?: string) =>
+    st.status === "ready"
+      ? ` · ${st.count} ${label}${radius ? ` within ${radius}` : ""}${st.note ? ` (${st.note})` : ""}`
+      : st.status === "unconfigured"
+        ? ` · ${label}: ${st.note}`
+        : st.status === "error"
+          ? ` · ${label} unavailable (${st.error})`
+          : st.status === "loading"
+            ? ` · loading ${label}…`
+            : "";
 
   return (
     <div className="app">
       {loading && <div className="progress" role="progressbar" aria-label="Loading datasets" />}
+      {!onboarded && (
+        <Welcome
+          index={searchIndex}
+          ready={!!staticData}
+          onChoose={(lat, lon, name) => {
+            setOrigin(lat, lon, name);
+            setPrefs({ onboarded: true });
+          }}
+          onPickOnMap={() => {
+            setPrefs({ onboarded: true, pinOnClick: true, mapMode: "2d", layout: { ...layout, collapsed: { ...layout.collapsed, map: false } } });
+            setPickHint(true);
+          }}
+          onDismiss={() => setPrefs({ onboarded: true })}
+        />
+      )}
       <header className="top">
         <div className="brand">
           <h1>Yonder</h1>
@@ -456,6 +582,14 @@ export default function App() {
       />
       {staticError && <div className="banner error">City data failed to load: {staticError}</div>}
       {horizons.error && <div className="banner warn">NASA Horizons data unavailable: {horizons.error}. Is the server running?</div>}
+      {pickHint && (
+        <div className="banner pick-hint">
+          Click anywhere on the map to set your origin, or drag the red pin.{" "}
+          <button type="button" className="icon-btn" onClick={() => setPickHint(false)} aria-label="Dismiss">
+            ✕
+          </button>
+        </div>
+      )}
       <main className={`main${selected ? " with-detail" : ""}`} style={mainStyle}>
         <Pane title="Distances" className="table-pane" collapsed={collapsed.table} onCollapse={(v) => setCollapsed("table", v)} vertical actions={<ColumnsMenu columns={columns} onChange={setColumns} />}>
           <DistanceTable
@@ -486,15 +620,14 @@ export default function App() {
               sky={sky}
               description={description}
               extraFacts={extraFacts}
+              now={now}
+              passes={passes}
+              passesLoading={passesLoading}
               onClose={() => setSelectedId(null)}
               onSetOrigin={setOrigin}
             />
           )}
-          {sidePanes[0]}
-          {!collapsed.map && !collapsed.solar ? (
-            <Splitter direction="row" onChange={(f) => setLayout({ sideSplit: f })} onReset={() => setLayout({ sideSplit: DEFAULT_LAYOUT.sideSplit })} min={0.15} max={0.85} label="Resize the map and solar system panels" />
-          ) : null}
-          {sidePanes[1]}
+          {sideChildren}
         </aside>
       </main>
       <footer className="foot">
@@ -507,10 +640,12 @@ export default function App() {
           {cats.poi && poiState.status === "error" && ` · nearby places unavailable (${poiState.error})`}
           {cats.aircraft && air.state.status === "ready" && ` · ${air.state.count} aircraft within 460 km (${air.state.source})`}
           {cats.aircraft && air.state.status === "error" && ` · aircraft unavailable (${air.state.error})`}
+          {cats.ship && vehicleStatus("ships", veh.shipState, `${SHIP_RADIUS_KM} km`)}
+          {cats.train && vehicleStatus("trains", veh.trainState)}
         </span>
         <span className="muted">
-          GeoNames (CC BY 4.0) · OurAirports · OpenStreetMap · CelesTrak · NASA/JPL Horizons & CNEOS · NASA Exoplanet Archive · HYG star catalog · adsb.fi / adsb.lol ·
-          Wikipedia · astronomy-engine · planet textures by Solar System Scope (CC BY 4.0)
+          GeoNames (CC BY 4.0) · OurAirports · OpenStreetMap · CelesTrak · NASA/JPL Horizons & CNEOS · NASA Exoplanet Archive · HYG star catalog · OpenNGC · adsb.fi / adsb.lol ·
+          AISStream · Digitraffic · Amtraker · Wikipedia · astronomy-engine · planet textures by Solar System Scope (CC BY 4.0)
         </span>
       </footer>
     </div>

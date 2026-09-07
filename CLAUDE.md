@@ -1,9 +1,10 @@
 # Yonder — notes for Claude Code
 
 Yonder is a local web app that shows the live distance from a chosen origin on Earth to roughly
-320,000 things: cities, towns, airports, landmarks, nearby OpenStreetMap places, aircraft,
-satellites, Solar System bodies, spacecraft, exoplanets and stars. Everything that moves updates
-once a second. It is a single-user desktop tool, not a hosted service.
+330,000 things: cities, towns, airports, landmarks, nearby OpenStreetMap places, aircraft, ships,
+trains, satellites, Solar System bodies and their moons, spacecraft, exoplanets, stars and deep-sky
+objects. Everything that moves updates once a second. It is a single-user desktop tool, not a
+hosted service (it is sometimes shared through an ngrok tunnel).
 
 Read `docs/ARCHITECTURE.md` before changing how data flows through the client.
 
@@ -33,7 +34,7 @@ src/                 React 19 + TypeScript client (Vite)
   types.ts           Target, Category, CATEGORIES — the shared vocabulary
   hooks/             One hook per data source (useSatellites, useAircraft, useHorizons, ...)
   lib/               Pure maths and formatting (geo, astro, units, horizons interpolation)
-  components/        UI; MapView (Leaflet), GlobeView (globe.gl), SolarSystem3D (three.js)
+  components/        UI; MapView (Leaflet), GlobeView (globe.gl), SkyView (canvas), SolarSystem3D (three.js)
   workers/           sat.worker.ts — SGP4 propagation off the main thread
   data/              Hand-curated lists: landmarks, deep-sky objects, Solar System regions
 server/              Express 5 API: proxies and caches external services, stores custom places
@@ -50,8 +51,9 @@ data/custom-places.json   The user's own places, editable by hand
 - Distances are kilometres everywhere internally; `lib/units.ts` formats for display.
   `Target.distanceKm` is `NaN` while unknown and sorts last.
 - Every row shown anywhere is a `Target` (`src/types.ts`). Ids are prefixed by source:
-  `city-`, `town-`, `apt-`, `lm-`, `poi-`, `custom-`, `air-`, `sat-<norad>`, `sol-`, `hz-<horizons id>`,
-  `exo-`, `hyg-`, `dso-`, `region-`. Several places pattern-match on these prefixes.
+  `city-`, `town-`, `apt-`, `lm-`, `poi-`, `custom-`, `air-`, `ship-`, `train-`, `sat-<norad>`, `sol-`,
+  `hz-<horizons id>`, `exo-`, `hyg-`, `dso-`, `ngc-`, `region-`. Several places pattern-match on
+  these prefixes (`App.DYNAMIC_ID` lists the per-tick ones).
 - Search text is pre-normalised into `Target.key` with `norm()` (`lib/search.ts`): lower-case,
   accents stripped. Never call `norm()` inside a per-tick loop; compute it once when data loads.
 - Angles are degrees at the type boundary; radians only inside maths helpers.
@@ -101,6 +103,9 @@ The client holds ~320k targets in memory and re-renders once a second. Keep thes
 | CNEOS close-approach API | This month's near-Earth flybys | daily | |
 | Overpass (OSM) | Places of interest within 22 km | 7 d per 2 km cell | Slow; four mirrors tried in turn |
 | adsb.fi / adsb.lol | Live aircraft | 8 s in memory | Browser polls every 10 s |
+| AISStream.io | Live ships (AIS) | last position per ship, in memory | Needs `AISSTREAM_KEY` env or `data/keys.json` (git-ignored); one WebSocket, ±3° box around the origin, closed after 3 min without polls |
+| Digitraffic (FI), Amtraker (US) | Live trains | 30 s / 60 s in memory | No key; Digitraffic needs the `Digitraffic-User` header and gzip |
+| OpenNGC | Deep-sky catalogue | offline bundle (`deepsky.json`) | Built by `build_data.py`; distances curated or from redshift |
 | Wikipedia REST + Wikidata | Descriptions | forever on disk (misses too) | |
 
 The server warms caches at start-up; first start with an empty `data/cache/` takes a few minutes
@@ -113,13 +118,32 @@ to fill Horizons tables in the background while the app is already usable.
   Field order is defined in `scripts/build_data.py` and read positionally in `useStaticData.ts`.
 - `dist/` is git-ignored. `npm start` without a build serves a plain-text hint instead of the app.
 - Prefs persist in `localStorage` under `yonder:prefs`; the URL parameters `?lat=&lon=&name=`,
-  `?map=`, `?only=`, `?sats=`, `?select=` override them for the session. Nested preference
-  objects (`layout`, `columns`, `globe`, `solar`) are deep-merged with their defaults in `load()`,
-  so adding a field only needs a default.
+  `?map=`, `?only=`, `?sats=`, `?select=`, `?open=`, `?theme=` override them for the session.
+  Nested preference objects (`layout`, `columns`, `globe`, `solar`, `sky`) are deep-merged with
+  their defaults in `load()`, so adding a field only needs a default. Bump `PREFS_VERSION` when a
+  default should reach existing users; `load()` then resets categories, solar/sky options and the
+  onboarding flag once, keeping origin (unless it is the old Skopje default) and layout.
+- First run: `onboarded` is false until the user picks an origin in `Welcome` (or a `?lat&lon`
+  link is opened). The default origin is Greenwich; the default categories are a calm subset
+  (`DEFAULT_CATS`), and the solar view shows planet orbits only.
 - Panels: `Pane` is controlled (collapsed state lives in `prefs.layout`), `Splitter` reports the
   fraction between its two DOM siblings, and `App` turns `layout` into the `--cols` grid variable
-  and the side column's flex values. The table's visible columns come from `prefs.columns` and are
+  and the side column's flex values. Side panes are ordered by `layout.order` and sized by
+  `layout.weights` (a splitter between two panes rewrites their two weights). Do not set an inline
+  `minHeight` on side panes; the stylesheet's 170 px minimum plus the scrolling side column keeps
+  them usable on short windows. The table's visible columns come from `prefs.columns` and are
   rendered through the `--cols` variable on `.table`.
+- SkyView draws on a 2D canvas with `SkyFrame` (fast alt/az, no precession); it receives the
+  unfiltered fixed/space/satellite lists on purpose, because "what is above me" should not depend
+  on the table filter. Deep-sky labels are limited to curated objects that are not quasars or
+  pulsars; compass labels sit at altitude −5.5°, so keep the dome radius at `min(w,h)/2 − 34`.
+- SolarSystem3D: three.js `Raycaster` ignores `visible`, so `pick()` filters candidates itself;
+  `CSS2DRenderer` honours only an object's own `visible`, so `setLabelsVisible()` traverses. Moon
+  groups appear within 14 planet radii of the camera; with the log scale the inner planets are
+  only tens of scene units apart, so a larger threshold shows Saturn's moons from Earth.
+- Headless verification: `scratchpad/cdp.mjs`-style DevTools scripting (Chrome with
+  `--use-angle=swiftshader`, 1250×820) renders all views; use `?open=` and `?select=` to reach
+  states, click toolbar buttons through `Runtime.evaluate`.
 - Basemaps: CARTO's free tiles now return "API KEY REQUIRED" watermarks, so the dark and light
   basemaps are Esri's World Dark/Light Gray canvases (base + reference labels, max zoom 16).
 - Horizons body ids: negative numbers are spacecraft, `NNN;` is a small-body record number,

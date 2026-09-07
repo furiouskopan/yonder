@@ -4,3 +4,4 @@ data/cache/
 data/raw/
 *.log
 .DS_Store
+data/keys.json

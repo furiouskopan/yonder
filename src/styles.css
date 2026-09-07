@@ -1557,3 +1557,247 @@ body.resizing-row .splitter.row::after {
   margin-left: auto;
   width: 90px;
 }
+
+
+/* ---- v4: welcome dialog, sky panel, passes, layout ordering, vehicles ---- */
+.welcome-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(2, 6, 23, 0.55);
+  backdrop-filter: blur(3px);
+}
+
+.welcome {
+  width: min(520px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 26px 28px 20px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+
+.welcome h2 {
+  margin: 0 0 8px;
+  font-size: 24px;
+}
+
+.welcome > p {
+  margin: 0 0 18px;
+  color: var(--muted);
+}
+
+.welcome-primary {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: 16px;
+  font-weight: 600;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, var(--panel));
+}
+
+.welcome-primary:hover {
+  background: color-mix(in srgb, var(--accent) 34%, var(--panel));
+}
+
+.welcome-msg {
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+.welcome-or {
+  margin: 16px 0 8px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.place-search {
+  position: relative;
+}
+
+.welcome-search input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 15px;
+}
+
+.welcome-search .suggest {
+  width: 100%;
+}
+
+.suggest-empty {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.welcome-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.welcome-row button {
+  flex: 1;
+}
+
+.welcome-tips {
+  margin: 18px 0 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.welcome-tips li + li {
+  margin-top: 4px;
+}
+
+.pick-hint {
+  cursor: default;
+}
+
+/* Sky panel */
+.sky {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--panel-2);
+}
+
+.sky canvas {
+  display: block;
+  cursor: crosshair;
+}
+
+.sky-caption {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+  font-size: 12px;
+  pointer-events: none;
+  text-shadow: 0 1px 2px var(--panel);
+}
+
+.sky-caption strong {
+  text-transform: capitalize;
+}
+
+.sky-toolbar {
+  left: auto;
+  right: 8px;
+}
+
+.sky-below {
+  position: absolute;
+  left: 50%;
+  bottom: 42px;
+  transform: translateX(-50%);
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  pointer-events: none;
+}
+
+/* Passes in the detail panel */
+.passes {
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.passes h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+
+.passes p {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.pass-now {
+  color: var(--up);
+}
+
+.pass-hint {
+  font-size: 11.5px;
+}
+
+.pass-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  margin: 2px 0 6px;
+}
+
+.pass-table th,
+.pass-table td {
+  text-align: left;
+  padding: 2px 10px 2px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.pass-table th {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* Layout menu ordering */
+.menu-order {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.menu-order label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.menu-order-btns {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.menu-order-btns .icon-btn {
+  padding: 0 6px;
+  line-height: 20px;
+}
+
+.menu-order-btns .icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Vehicles on the 2D map */
+.ship-icon svg {
+  display: block;
+  transition: transform 0.6s linear;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.6));
+}
+
+.ship-icon.hovered svg {
+  transform-origin: center;
+  filter: drop-shadow(0 0 4px #fff);
+}
+
+/* Moon labels in the solar system */
+.s3d-label.moon {
+  font-size: 10px;
+  color: #d1d5db;
+  opacity: 0.85;
+}

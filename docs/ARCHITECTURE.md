@@ -15,14 +15,18 @@ because the caches should survive page reloads. The client does all of the maths
  │  ├ useSatellites ──▶ sat.worker.ts       │     │ horizons.ts   vectors     ──▶ JPL Horizons
  │  │      (SGP4, Float32Array back)   ◀────┼──── │ orbits.ts     elements    ──▶ JPL Horizons
  │  ├ useAircraft  (dead-reckoned)     ◀────┼──── │ aircraft.ts   ADS-B       ──▶ adsb.fi / adsb.lol
+ │  ├ useVehicles  (ships, trains)     ◀────┼──── │ ships.ts      AIS socket  ──▶ AISStream.io (key)
+ │  │                                       │     │ trains.ts     positions   ──▶ Digitraffic, Amtraker
  │  ├ usePoi                            ◀────┼──── │ poi.ts        Overpass    ──▶ OpenStreetMap
  │  ├ useDescription                    ◀────┼──── │ describe.ts   summaries   ──▶ Wikipedia
  │  └ useCustomPlaces                   ◀───▶┼──── │ customPlaces.ts           ──▶ data/custom-places.json
  │                                          │     │ cache.ts   data/cache/*.json   │
  │  filter → merge → DistanceTable          │     └────────────────────────────────┘
- │  earthRows / satRows / airRows → MapView │
+ │  earthRows / satRows / airRows /        │
+ │            vehRows / footprint → MapView │
  │                                GlobeView │
- │  solarItems → SolarSystem3D              │
+ │  fixed + bodies + sats + air → SkyView   │
+ │  solarItems (planets, moons…) → SolarSystem3D
  └──────────────────────────────────────────┘
 ```
 
@@ -39,9 +43,9 @@ Targets fall into three tiers by how often they change:
 
 | Tier | Sources | Rebuilt when |
 | --- | --- | --- |
-| Fixed | stars, deep-sky objects, exoplanets, Solar System regions | dataset loads (distance never changes) |
+| Fixed | stars, deep-sky objects (curated + OpenNGC), exoplanets, Solar System regions | dataset loads (distance never changes) |
 | Earth static | cities, capitals, towns, airports, landmarks, POIs, custom places, computed points | origin moves, a dataset or the POI/custom list changes |
-| Dynamic | Sun/Moon/planets, Horizons bodies, satellites, aircraft | every second (`useClock`) |
+| Dynamic | Sun/Moon/planets, Horizons bodies, satellites, aircraft, ships, trains | every second (`useClock`) |
 
 The static tiers are sorted once per origin/filter/sort change; the dynamic tier is small and
 sorted per tick. `App.tsx` never materialises the union: `lib/merge.ts` records where each dynamic
@@ -59,7 +63,10 @@ may mutate a `Target`.
 1. **Clock.** `useClock(1000)` produces `now` aligned to the second. Every per-second memo depends
    on `now`; nothing else polls timers.
 2. **Preferences.** `usePrefs` holds origin, units, category filters, satellite set, map mode,
-   basemap. Persisted to `localStorage`, overridable by URL parameters.
+   basemap, the panel layout and the per-view options. Persisted to `localStorage`, overridable by
+   URL parameters. `PREFS_VERSION` resets the defaults-related parts (categories, solar/sky
+   options, the onboarding flag) once when the stored version is older; the origin and layout
+   survive. `onboarded: false` shows the welcome dialog until the user picks an origin.
 3. **Static datasets.** `useStaticData` fetches `public/data/*.json` (cities and countries first,
    then towns, airports, exoplanets, stars as they arrive) and converts positional rows straight
    into `Target`s in 12k-row slices between frames, so the page stays responsive while 300k rows
@@ -74,7 +81,8 @@ may mutate a `Target`.
    of the Earth, Kármán line).
 5. **Fixed targets.** `lib/stars.ts` builds the star, exoplanet and deep-sky targets straight from
    the positional rows. Curated deep-sky entries take precedence over HYG catalog stars with the
-   same name.
+   same name and over OpenNGC rows with the same Messier number or common name. Stars carry a
+   numeric `mag` so the sky view can size them without parsing facts.
 6. **Solar System.** `useSpaceTargets` computes Sun, Moon and planets locally with
    `astronomy-engine` and interpolates every Horizons body (probes, moons, dwarf planets,
    asteroids, comets, this month's near-Earth flybys) from its 48-hour vector table using cubic
@@ -84,10 +92,15 @@ may mutate a `Target`.
    `sat.worker.ts`, and every tick asks the worker to propagate all of them. The worker returns a
    `Float32Array` of seven values per satellite (range, az, el, sub-lat, sub-lon, height, speed);
    the hook spreads the numbers over a per-satellite base object (name, class, SATCAT facts) that
-   was built once when the set loaded. Ground tracks for the selected satellite are also computed
-   by the worker on demand.
-8. **Aircraft.** `useAircraft` polls `/api/aircraft` every 10 s and dead-reckons each aircraft
-   forward from its last report using ground speed, track and vertical rate.
+   was built once when the set loaded. Ground tracks and pass predictions (`passesOf`: every
+   above-horizon interval in the next 24 h at 15 s steps, with rise/peak/set azimuths) for the
+   selected satellite are also computed by the worker on demand; `App` refreshes the passes every
+   ten minutes and `lib/passes.ts` formats them and computes the visibility footprint circle.
+8. **Aircraft, ships, trains.** `useAircraft` polls `/api/aircraft` every 10 s and dead-reckons
+   each aircraft forward from its last report using ground speed, track and vertical rate.
+   `useVehicles` does the same for ships (`/api/ships`, 15 s, speed and course over ground) and
+   trains (`/api/trains`, 30 s); both are fetched only while their category chip is on. Surface
+   vehicles use the great-circle distance like places do.
 9. **Filter and merge.** The category toggles plus the free-text filter (deferred with
    `useDeferredValue`, matched against `Target.key`) are applied to each tier; when every category
    is on and the text is empty the original arrays are passed through untouched. The static tier is
@@ -97,8 +110,12 @@ may mutate a `Target`.
    from the distance-ordered Earth list (capped at 400 cities/towns/airports so landmarks stay
    visible), the visible satellites (the 2D map draws at most 800) and all aircraft.
 10. **Selection and hover.** `selectedId` and `hoverId` live in `App` and are shared by the table,
-    map, globe and Solar System view, so hovering a marker highlights the row and vice versa.
+    map, globe, sky and Solar System views, so hovering a marker highlights the row and vice versa.
     `useDescription` fetches the Wikipedia summary for the selected target through the server.
+11. **Moons.** `useSpaceTargets` gives every Horizons moon (and Earth's Moon) a `parent` and a
+    `rel` vector: its offset from the parent planet in ecliptic J2000 AU, from the moon's
+    geocentric vector minus the planet's (`A.GeoVector`, computed once per tick per planet). The
+    solar view places moons around their planet in the true direction at a compressed distance.
 
 ## Views
 
@@ -110,17 +127,36 @@ may mutate a `Target`.
   map once; later effects diff marker sets by id so satellite and aircraft markers are moved, not
   recreated, and restyled only when they cross the horizon. Tooltips are functions evaluated when
   shown, reading the latest target from a per-id map. Popups fetch a Wikipedia blurb lazily.
-- **GlobeView** — globe.gl (three.js). Satellites, Earth places and aircraft are three
-  `THREE.Points` layers whose position/colour buffers are rewritten in place each tick. The buffers
-  are allocated with spare capacity and only grow (disposing the geometry first) with
-  `setDrawRange` marking the live count; picking uses a raycaster against the visible layers.
+- **SkyView** — a 2D canvas planetarium. `lib/sky.ts` `SkyFrame` does the alt/az maths with plain
+  spherical trigonometry (no precession or refraction, fine for a chart) so thousands of stars
+  cost a few milliseconds per tick; the exact `makeSky` path is still used for single objects.
+  Star positions, sizes and colours are precomputed into typed arrays when the catalogue or the
+  magnitude limit changes. Everything drawn is also pushed into a hit list for hover and click.
+  Solar-system bodies, satellites and aircraft reuse the look angles the rest of the app computes.
+- **GlobeView** — globe.gl (three.js). Satellites, Earth places, aircraft and surface vehicles are
+  four `THREE.Points` layers drawn by a small `ShaderMaterial` (round, soft, per-point size,
+  clamped pixel size) whose position/colour/size buffers are rewritten in place each tick. The
+  buffers are allocated with spare capacity and only grow (disposing the geometry first) with
+  `setDrawRange` marking the live count. The id → index map is rebuilt only when the id list
+  changes, coordinates are computed inline (globe radius 100), the bounding sphere is fixed, and
+  picking uses a raycaster whose tolerance scales with the camera altitude. Track and footprint
+  are `pathsData` entries.
   A toolbar toggles layers, auto-rotation, the day/night texture and dot size (`prefs.globe`); a
   `webglcontextlost` listener shows a rebuild button instead of a black canvas. Rendering pauses
   while the tab is hidden. Lazy-loaded; only mounted in 3D mode.
 - **SolarSystem3D** — plain three.js with OrbitControls and CSS2D labels. Planets are textured,
   lit `MeshStandardMaterial` spheres (Solar System Scope maps, loaded lazily and cached across
   rebuilds) inside a tilt group and a spin group: Earth turns with the real Greenwich sidereal
-  angle, the others at their sidereal rates; Saturn carries a ring mesh with a radial UV map. The
+  angle, the others at their sidereal rates; Saturn carries a ring mesh with a radial UV map.
+  Worlds with air get an additive rim-glow shell; Earth's night texture is an emissive map masked
+  to the night side in `onBeforeCompile`. Each planet owns a hidden moon group that becomes
+  visible when the camera comes within 14 planet radii (checked in the render loop); moons are
+  small spheres at `rel` direction × a log-compressed distance, major ones labelled. Small-body
+  orbit lines and spacecraft trails are always built but only visible for the hovered/selected
+  body unless the option is on; `pick()` filters by visibility and scales the raycaster tolerance
+  with the camera distance. The renderer drops to pixel ratio 1 while the controls move and
+  restores full resolution 220 ms after the last change. Follow moves the camera by the selected
+  body's per-tick displacement. The
   Sun is an emissive sphere with an additive glow sprite, the Milky Way a back-face sphere. All
   other bodies are one `Points` cloud. The scene is (re)built only when the set of bodies, the
   orbit data, the kind filters or the scale changes; the per-second update writes positions into
@@ -153,6 +189,8 @@ upstream:
 | `orbits.ts` | `/api/orbits` | `orbit-<id>.json` | 30 d (7 d for flybys); one at a time, never while tables refresh |
 | `poi.ts` | `/api/poi?lat&lon` | `poi-<cell>.json` | 7 d per 0.02° cell |
 | `aircraft.ts` | `/api/aircraft?lat&lon&nm` | in memory | 8 s |
+| `ships.ts` | `/api/ships?lat&lon&km` | in memory (last position per MMSI, 25 min) | AISStream WebSocket kept open while polled; box of ±3° around the origin; `{configured:false}` without a key |
+| `trains.ts` | `/api/trains?lat&lon&km` | in memory per provider | Digitraffic 30 s, Amtraker 60 s; stale list kept on failure |
 | `describe.ts` | `/api/describe?q&fallback` | `describe.json` (flushed every 60 s) | never expires |
 | `customPlaces.ts` | `GET/PUT /api/custom-places` | `data/custom-places.json` | on write |
 
@@ -189,7 +227,10 @@ second, most of it building the per-tick satellite targets and rewriting the glo
 ## Data build
 
 `scripts/build_data.py` downloads GeoNames (cities500, cities15000, countryInfo), OurAirports,
-the NASA Exoplanet Archive composite table and the HYG star catalog into `data/raw/`, then writes
-compact positional-row JSON to `public/data/`. Cities are sorted by population, airports by
+the NASA Exoplanet Archive composite table, the HYG star catalog and OpenNGC into `data/raw/`,
+then writes compact positional-row JSON to `public/data/`. Deep-sky distances: a curated table for
+the Messier objects and ~70 famous NGC/IC objects, light-travel distance from redshift (flat
+ΛCDM, H0 = 70) for galaxies with z > 0.002, and nothing else (objects without a distance are
+left out). Cities are sorted by population, airports by
 size class, exoplanets by distance, stars by magnitude. The client relies on those orders for
 search ranking.

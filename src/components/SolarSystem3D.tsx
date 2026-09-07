@@ -1,8 +1,9 @@
 // Interactive solar system on three.js: textured, lit planets with real axial tilts and rotation,
-// Saturn's rings, the Milky Way behind, real orbit shapes for small bodies and spacecraft trails.
-// Hover a body or an orbit to see whose it is; click for details. The scene is built when the set
-// of bodies, the orbit data, the filters or the scale change; the once-a-second update only writes
-// positions into existing meshes and buffers.
+// rim-lit atmospheres, Earth's city lights on its night side, Saturn's rings, the moons of every
+// planet (revealed as you fly close), the Milky Way behind, real orbit shapes for small bodies and
+// spacecraft trails. Hover a body or an orbit to see whose it is; click for details; Follow keeps
+// the camera on the selected body as it moves. The scene is built when the set of bodies, the orbit
+// data, the filters or the scale change; the once-a-second update only writes positions.
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import * as A from "astronomy-engine";
@@ -11,7 +12,7 @@ import { CSS2DObject, CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRe
 import type { Vec3 } from "../types";
 import type { OrbitInfo } from "../lib/orbits";
 import { conicPath } from "../lib/orbits";
-import { formatDistance, type Unit } from "../lib/units";
+import { KM_PER_AU, formatDistance, type Unit } from "../lib/units";
 import { makeTime } from "../lib/astro";
 import { SOLAR_KINDS, type SolarKind, type SolarPrefs } from "../hooks/usePrefs";
 
@@ -25,6 +26,8 @@ export interface SolarItem {
   orbit?: Vec3[]; // sampled orbit (planets); a new array whenever it is resampled
   hzId?: string; // Horizons id for orbit lookup
   radiusKm?: number;
+  parent?: string; // moons: the planet they orbit
+  rel?: Vec3; // moons: offset from the parent, ecliptic J2000, AU
 }
 
 interface Props {
@@ -51,7 +54,7 @@ const PLANET_COLORS: Record<string, number> = {
   Saturn: 0xe9d8a6, Uranus: 0x7dd3fc, Neptune: 0x6366f1, Pluto: 0xa78bfa,
 };
 const KIND_COLORS: Record<SolarKind, number> = {
-  planet: 0x3b82f6, probe: 0xec4899, dwarf: 0xf97316, tno: 0xfb923c, centaur: 0xfdba74, asteroid: 0xf59e0b,
+  planet: 0x3b82f6, moon: 0xd1d5db, probe: 0xec4899, dwarf: 0xf97316, tno: 0xfb923c, centaur: 0xfdba74, asteroid: 0xf59e0b,
   comet: 0x38bdf8, interstellar: 0x22d3ee, neo: 0xef4444,
 };
 const TEXTURES: Record<string, string> = {
@@ -61,6 +64,22 @@ const TEXTURES: Record<string, string> = {
 // Axial tilt (degrees) and sidereal rotation period (hours; negative = retrograde).
 const TILT_DEG: Record<string, number> = { Mercury: 0.03, Venus: 177.4, Earth: 23.44, Mars: 25.19, Jupiter: 3.13, Saturn: 26.73, Uranus: 97.77, Neptune: 28.32, Pluto: 122.5 };
 const SPIN_HOURS: Record<string, number> = { Mercury: 1407.6, Venus: -5832.5, Earth: 23.934, Mars: 24.62, Jupiter: 9.93, Saturn: 10.66, Uranus: -17.24, Neptune: 16.11, Pluto: -153.3 };
+// Rim glow colour, strength and falloff per world.
+const ATMOS: Record<string, { color: number; intensity: number; power: number }> = {
+  Earth: { color: 0x5aa8ff, intensity: 1.1, power: 2.6 },
+  Venus: { color: 0xf5dfae, intensity: 0.8, power: 3.2 },
+  Mars: { color: 0xf3b58f, intensity: 0.35, power: 4 },
+  Jupiter: { color: 0xecd9b8, intensity: 0.35, power: 4 },
+  Saturn: { color: 0xf5e7c0, intensity: 0.3, power: 4 },
+  Uranus: { color: 0xa9e7f2, intensity: 0.5, power: 3.4 },
+  Neptune: { color: 0x8a9bff, intensity: 0.55, power: 3.4 },
+};
+// Moons drawn larger and labelled; the rest are small dots labelled on hover.
+const MAJOR_MOONS = new Set([
+  "Moon", "Phobos", "Deimos", "Io", "Europa", "Ganymede", "Callisto", "Amalthea", "Himalia", "Mimas", "Enceladus", "Tethys", "Dione", "Rhea", "Titan", "Hyperion", "Iapetus", "Phoebe",
+  "Miranda", "Ariel", "Umbriel", "Titania", "Oberon", "Puck", "Triton", "Nereid", "Proteus", "Larissa", "Charon", "Nix", "Hydra", "Kerberos", "Styx",
+]);
+const MOON_COLORS: Record<string, number> = { Io: 0xe8d36a, Europa: 0xe3dccf, Ganymede: 0xb5a58f, Callisto: 0x8c8073, Titan: 0xe0a04a, Enceladus: 0xf3f4f6, Triton: 0xd7c8c0, Moon: 0xc9c9c9, Charon: 0xb8b0a8 };
 
 type Scaler = (v: Vec3, out: THREE.Vector3) => THREE.Vector3;
 
@@ -82,8 +101,11 @@ function makeScaler(mode: SolarPrefs["scale"]): Scaler {
 
 export function kindOf(it: SolarItem): SolarKind {
   if (it.id === "earth" || it.kind === "Planet" || it.kind === "Dwarf planet") return "planet";
+  if (it.kind === "moon" || it.kind === "Moon") return "moon";
   return (it.kind in KIND_COLORS ? it.kind : "asteroid") as SolarKind;
 }
+
+const parentIdOf = (name: string): string => (name === "Earth" ? "earth" : `sol-${name}`);
 
 function makeLabel(text: string, cls: string): CSS2DObject {
   const div = document.createElement("div");
@@ -92,7 +114,15 @@ function makeLabel(text: string, cls: string): CSS2DObject {
   return new CSS2DObject(div);
 }
 
+/** CSS2DRenderer only honours an object's own `visible`, so toggle every label under a group explicitly. */
+function setLabelsVisible(root: THREE.Object3D, v: boolean): void {
+  root.traverse((o) => {
+    if (o instanceof CSS2DObject) o.visible = v;
+  });
+}
+
 const tmp = new THREE.Vector3();
+const tmp2 = new THREE.Vector3();
 
 /** Write a polyline (optionally closed) into a position buffer. */
 function fillLine(arr: Float32Array, pts: Vec3[], closed: boolean, scale: Scaler): void {
@@ -123,12 +153,13 @@ function lineOf(pts: Vec3[], colorHex: number, opacity: number, closed: boolean,
 // ---- textures (loaded once, shared across rebuilds) ----
 const loader = new THREE.TextureLoader();
 const texCache = new Map<string, Promise<THREE.Texture>>();
-function loadTexture(file: string): Promise<THREE.Texture> {
-  let p = texCache.get(file);
+function loadTexture(file: string, base = "/textures/planets/"): Promise<THREE.Texture> {
+  const url = base + file;
+  let p = texCache.get(url);
   if (!p) {
     p = new Promise<THREE.Texture>((resolve, reject) =>
       loader.load(
-        `/textures/planets/${file}`,
+        url,
         (t) => {
           t.colorSpace = THREE.SRGBColorSpace;
           t.anisotropy = 4;
@@ -138,8 +169,8 @@ function loadTexture(file: string): Promise<THREE.Texture> {
         reject,
       ),
     );
-    p.catch(() => texCache.delete(file));
-    texCache.set(file, p);
+    p.catch(() => texCache.delete(url));
+    texCache.set(url, p);
   }
   return p;
 }
@@ -174,6 +205,46 @@ function ringGeometry(inner: number, outer: number): THREE.RingGeometry {
   return geom;
 }
 
+/** Additive rim glow: bright where the surface turns away from the camera. */
+function atmosphere(r: number, spec: { color: number; intensity: number; power: number }): THREE.Mesh {
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Color(spec.color) }, uIntensity: { value: spec.intensity }, uPower: { value: spec.power } },
+    vertexShader: `
+      varying vec3 vN; varying vec3 vP;
+      void main() { vN = normalize(normalMatrix * normal); vec4 mv = modelViewMatrix * vec4(position, 1.0); vP = mv.xyz; gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `
+      uniform vec3 uColor; uniform float uIntensity; uniform float uPower; varying vec3 vN; varying vec3 vP;
+      void main() { float rim = 1.0 - max(dot(normalize(vN), normalize(-vP)), 0.0); float a = pow(rim, uPower) * uIntensity; gl_FragColor = vec4(uColor, a); }`,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.FrontSide,
+  });
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(r * 1.045, 40, 28), mat);
+  mesh.renderOrder = 2;
+  return mesh;
+}
+
+/** Earth: city lights only where the Sun (at the scene origin) does not shine. */
+function nightLights(mat: THREE.MeshStandardMaterial, tex: THREE.Texture): void {
+  mat.emissiveMap = tex;
+  mat.emissive.set(0xffffff);
+  mat.emissiveIntensity = 1.0;
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace("#include <common>", "#include <common>\nvarying vec3 vWorldPos;").replace("#include <worldpos_vertex>", "#include <worldpos_vertex>\nvWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", "#include <common>\nvarying vec3 vWorldPos;")
+      .replace(
+        "#include <emissivemap_fragment>",
+        `#include <emissivemap_fragment>
+        vec3 toSunView = normalize((viewMatrix * vec4(-vWorldPos, 0.0)).xyz);
+        float dayside = dot(normalize(normal), toSunView);
+        totalEmissiveRadiance *= (1.0 - smoothstep(-0.08, 0.18, dayside));`,
+      );
+  };
+  mat.needsUpdate = true;
+}
+
 /** Per-body handles into the scene so positions can be updated without rebuilding anything. */
 interface Handle {
   root?: THREE.Object3D; // tilt group (planets)
@@ -184,6 +255,16 @@ interface Handle {
   orbitSrc?: Vec3[];
   point?: number; // index into the small-body point cloud
   radius: number;
+  parentId?: string; // moons
+  moonMesh?: THREE.Mesh;
+}
+
+interface MoonSystem {
+  group: THREE.Group;
+  parentId: string;
+  radius: number; // parent's scene radius
+  radiusAu: number; // parent's real radius
+  shown: boolean;
 }
 
 interface Scene {
@@ -203,6 +284,8 @@ interface Scene {
   handles: Map<string, Handle>;
   positions: Map<string, THREE.Vector3>;
   lines: Map<string, THREE.Line>;
+  smallLines: Set<string>; // ids whose orbit line is only shown on demand
+  moons: MoonSystem[];
   highlight: THREE.Mesh;
   hoverLabel: CSS2DObject;
   hoverHit: { id: string; point: THREE.Vector3 } | null;
@@ -210,6 +293,9 @@ interface Scene {
   selectedLine: THREE.Line | null;
   dirty: boolean;
   raf: number;
+  fullDpr: number;
+  lowRes: boolean;
+  resTimer: number;
 }
 
 const setLineOpacity = (line: THREE.Line | null, factor: number) => {
@@ -222,12 +308,13 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
   const wrapRef = useRef<HTMLDivElement>(null); // sized wrapper that also holds the overlays
   const mountRef = useRef<HTMLDivElement>(null); // the renderer's canvas and label layer live here
   const sceneRef = useRef<Scene | null>(null);
-  const propsRef = useRef({ items, onSelect, onHover, unit });
-  propsRef.current = { items, onSelect, onHover, unit };
+  const propsRef = useRef({ items, onSelect, onHover, unit, prefs, selectedId, hoverId });
+  propsRef.current = { items, onSelect, onHover, unit, prefs, selectedId, hoverId };
   const [ready, setReady] = useState(false);
   const [lost, setLost] = useState(false);
   const [epoch, setEpoch] = useState(0);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [follow, setFollow] = useState(false);
   const kindsKey = SOLAR_KINDS.map((k) => (prefs.kinds[k.id] ? "1" : "0")).join("");
   // The scene structure depends only on which bodies exist (and which are shown), not on where they are.
   const structureKey = useMemo(() => items.map((i) => i.id).join("\n"), [items]);
@@ -243,7 +330,8 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
     const mount = mountRef.current;
     if (!el || !mount) return;
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    const fullDpr = Math.min(window.devicePixelRatio, 1.5);
+    renderer.setPixelRatio(fullDpr);
     renderer.setSize(el.clientWidth, el.clientHeight);
     renderer.domElement.className = "s3d-canvas";
     mount.appendChild(renderer.domElement);
@@ -253,13 +341,13 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
     mount.appendChild(labels.domElement);
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(45, el.clientWidth / Math.max(1, el.clientHeight), 0.05, 6000);
+    const camera = new THREE.PerspectiveCamera(45, el.clientWidth / Math.max(1, el.clientHeight), 0.02, 6000);
     camera.up.set(0, 0, 1);
     camera.position.set(150, -190, 120);
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
-    controls.minDistance = 2.5;
+    controls.minDistance = 0.6;
     controls.maxDistance = 1500;
     controls.zoomSpeed = 0.9;
     controls.zoomToCursor = true;
@@ -310,13 +398,14 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
     scene.add(glow);
     scene.add(makeLabel("Sun", "planet"));
     scene.add(new THREE.PointLight(0xfff4e0, 2.4, 0, 0));
-    scene.add(new THREE.AmbientLight(0xffffff, 0.32));
+    scene.add(new THREE.AmbientLight(0xffffff, 0.3));
 
     const content = new THREE.Group();
     const labelGroup = new THREE.Group();
     const overlay = new THREE.Group();
     scene.add(content, labelGroup, overlay);
-    const highlight = new THREE.Mesh(new THREE.RingGeometry(3.2, 3.9, 40), new THREE.MeshBasicMaterial({ color: 0xf59e0b, side: THREE.DoubleSide, transparent: true, opacity: 0.95 }));
+    const highlight = new THREE.Mesh(new THREE.RingGeometry(3.3, 3.5, 48), new THREE.MeshBasicMaterial({ color: 0xf59e0b, side: THREE.DoubleSide, transparent: true, opacity: 0.8, depthTest: false }));
+    highlight.renderOrder = 5;
     highlight.visible = false;
     overlay.add(highlight);
     const hoverLabel = makeLabel("", "hover");
@@ -325,21 +414,24 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
 
     const S: Scene = {
       renderer, labels, scene, camera, controls, content, labelGroup, overlay, skybox, stars,
-      pickables: [], pointIds: [], small: null, handles: new Map(), positions: new Map(), lines: new Map(),
-      highlight, hoverLabel, hoverHit: null, hoveredLine: null, selectedLine: null, dirty: true, raf: 0,
+      pickables: [], pointIds: [], small: null, handles: new Map(), positions: new Map(), lines: new Map(), smallLines: new Set(), moons: [],
+      highlight, hoverLabel, hoverHit: null, hoveredLine: null, selectedLine: null, dirty: true, raf: 0, fullDpr, lowRes: false, resTimer: 0,
     };
     sceneRef.current = S;
 
     const raycaster = new THREE.Raycaster();
-    raycaster.params.Points = { threshold: 2.2 };
-    raycaster.params.Line = { threshold: 1.1 };
     const mouse = new THREE.Vector2();
     const pick = (ev: MouseEvent): { id: string; point: THREE.Vector3 } | null => {
       const rect = renderer.domElement.getBoundingClientRect();
       mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(mouse, camera);
-      const hits = raycaster.intersectObjects(S.pickables, false);
+      // Tolerance follows the zoom: a few pixels whether you look at the whole system or one moon.
+      const d = camera.position.distanceTo(controls.target);
+      raycaster.params.Points = { threshold: Math.max(0.03, d * 0.011) };
+      raycaster.params.Line = { threshold: Math.max(0.02, d * 0.0055) };
+      const candidates = S.pickables.filter((o) => o.visible && (!(o.userData.group as THREE.Object3D | undefined) || (o.userData.group as THREE.Object3D).visible));
+      const hits = raycaster.intersectObjects(candidates, false);
       // Bodies win over orbit lines when both are under the cursor.
       let lineHit: { id: string; point: THREE.Vector3 } | null = null;
       for (const h of hits) {
@@ -377,6 +469,23 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
     renderer.domElement.addEventListener("pointerleave", onLeave);
     renderer.domElement.addEventListener("webglcontextlost", onLost);
 
+    // Render at a lower resolution while the camera moves, full resolution once it settles.
+    const onChange = () => {
+      if (fullDpr > 1.01 && !S.lowRes) {
+        S.lowRes = true;
+        renderer.setPixelRatio(1);
+      }
+      window.clearTimeout(S.resTimer);
+      S.resTimer = window.setTimeout(() => {
+        if (S.lowRes) {
+          S.lowRes = false;
+          renderer.setPixelRatio(S.fullDpr);
+          S.dirty = true;
+        }
+      }, 220);
+    };
+    controls.addEventListener("change", onChange);
+
     const ro = new ResizeObserver(() => {
       const w = el.clientWidth;
       const h = Math.max(1, el.clientHeight);
@@ -392,6 +501,17 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
       S.raf = requestAnimationFrame(loop);
       if (document.hidden) return;
       const moved = controls.update();
+      // Moon systems appear when the camera comes close to their planet.
+      const showMoons = propsRef.current.prefs.moons;
+      for (const m of S.moons) {
+        const near = showMoons && camera.position.distanceTo(m.group.position) < m.radius * 14;
+        if (near !== m.shown) {
+          m.shown = near;
+          m.group.visible = near;
+          setLabelsVisible(m.group, near && propsRef.current.prefs.labels);
+          S.dirty = true;
+        }
+      }
       if (moved || S.dirty) {
         S.dirty = false;
         glow.scale.setScalar(Math.max(8, Math.min(40, camera.position.length() * 0.08)));
@@ -405,11 +525,13 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
 
     return () => {
       cancelAnimationFrame(S.raf);
+      window.clearTimeout(S.resTimer);
       ro.disconnect();
       renderer.domElement.removeEventListener("pointermove", onMove);
       renderer.domElement.removeEventListener("click", onClick);
       renderer.domElement.removeEventListener("pointerleave", onLeave);
       renderer.domElement.removeEventListener("webglcontextlost", onLost);
+      controls.removeEventListener("change", onChange);
       controls.dispose();
       renderer.dispose();
       mount.innerHTML = "";
@@ -425,6 +547,8 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
     S.skybox.visible = prefs.skybox;
     S.stars.visible = !prefs.skybox;
     S.labelGroup.visible = prefs.labels;
+    setLabelsVisible(S.labelGroup, prefs.labels);
+    for (const m of S.moons) setLabelsVisible(m.group, prefs.labels && m.shown);
     S.dirty = true;
   }, [prefs.skybox, prefs.labels, ready]);
 
@@ -440,8 +564,8 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
           const obj = o as THREE.Mesh | THREE.Line | THREE.Points;
           if ("geometry" in obj && obj.geometry) obj.geometry.dispose();
           if ("material" in obj && obj.material) (Array.isArray(obj.material) ? obj.material : [obj.material]).forEach((m) => m.dispose());
+          if (o instanceof CSS2DObject) o.element.remove();
         });
-        if (child instanceof CSS2DObject) child.element.remove();
       }
     };
     disposeChildren(S.content);
@@ -450,6 +574,8 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
     S.handles.clear();
     S.positions.clear();
     S.lines.clear();
+    S.smallLines.clear();
+    S.moons = [];
     S.small = null;
     S.hoveredLine = null;
     S.selectedLine = null;
@@ -471,63 +597,108 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
     const smallIds: string[] = [];
     const smallCol: number[] = [];
     const c = new THREE.Color();
-    for (const it of current) {
+    const moonSystems = new Map<string, MoonSystem>();
+    const planets: SolarItem[] = [];
+    const rest: SolarItem[] = [];
+    for (const it of current) (kindOf(it) === "planet" ? planets : rest).push(it);
+
+    for (const it of planets) {
+      if (!prefs.kinds.planet) break;
+      const h: Handle = { radius: 0 };
+      const r = it.radiusKm ? Math.min(2.6, Math.max(0.9, (Math.log10(it.radiusKm) - 2.4) * 0.95)) : 1;
+      h.radius = r;
+      const mat = new THREE.MeshStandardMaterial({ color: PLANET_COLORS[it.name] ?? 0xe5e7eb, roughness: 0.95, metalness: 0 });
+      const mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 48, 32), mat);
+      mesh.rotation.x = Math.PI / 2; // texture poles along +z
+      mesh.userData.id = it.id;
+      const spin = new THREE.Group();
+      spin.add(mesh);
+      const tilt = new THREE.Group();
+      tilt.rotation.x = -(TILT_DEG[it.name] ?? 0) * D2R;
+      tilt.add(spin);
+      const file = TEXTURES[it.name];
+      if (file) {
+        loadTexture(`${file}.jpg`)
+          .then((t) => {
+            mat.map = t;
+            mat.color.set(0xffffff);
+            mat.needsUpdate = true;
+            S.dirty = true;
+          })
+          .catch(() => {});
+      }
+      if (it.id === "earth") {
+        loadTexture("earth-night.jpg", "/textures/")
+          .then((t) => {
+            nightLights(mat, t);
+            S.dirty = true;
+          })
+          .catch(() => {});
+      }
+      const atm = ATMOS[it.name];
+      if (atm && prefs.atmospheres) tilt.add(atmosphere(r, atm));
+      if (it.name === "Saturn") {
+        const ringMat = new THREE.MeshBasicMaterial({ color: 0xd9c9a3, side: THREE.DoubleSide, transparent: true, opacity: 0.85, depthWrite: false });
+        const ring = new THREE.Mesh(ringGeometry(r * 1.25, r * 2.3), ringMat);
+        ring.userData.id = it.id;
+        tilt.add(ring);
+        S.pickables.push(ring);
+        loadTexture("saturn_ring_alpha.png")
+          .then((t) => {
+            ringMat.map = t;
+            ringMat.alphaMap = t;
+            ringMat.color.set(0xffffff);
+            ringMat.needsUpdate = true;
+            S.dirty = true;
+          })
+          .catch(() => {});
+      }
+      h.root = tilt;
+      h.spin = spin;
+      h.mesh = mesh;
+      S.content.add(tilt);
+      S.pickables.push(mesh);
+      h.label = makeLabel(it.id === "earth" ? "Earth (you are here)" : it.name, "planet");
+      S.labelGroup.add(h.label);
+      if (it.orbit && prefs.orbits) {
+        h.orbitLine = lineOf(it.orbit, PLANET_COLORS[it.name] ?? 0x64748b, 0.45, true, scale);
+        h.orbitLine.userData.id = it.id;
+        h.orbitSrc = it.orbit;
+        S.content.add(h.orbitLine);
+        S.pickables.push(h.orbitLine);
+        S.lines.set(it.id, h.orbitLine);
+      }
+      S.handles.set(it.id, h);
+      // A moon system group that follows the planet; moons are added below.
+      const group = new THREE.Group();
+      group.visible = false;
+      S.content.add(group);
+      const sys: MoonSystem = { group, parentId: it.id, radius: r, radiusAu: (it.radiusKm ?? 6371) / KM_PER_AU, shown: false };
+      moonSystems.set(it.id, sys);
+      S.moons.push(sys);
+    }
+
+    for (const it of rest) {
       const kind = kindOf(it);
       if (!prefs.kinds[kind]) continue;
       const h: Handle = { radius: 0 };
-      if (kind === "planet") {
-        const r = it.radiusKm ? Math.min(2.6, Math.max(0.9, (Math.log10(it.radiusKm) - 2.4) * 0.95)) : 1;
-        h.radius = r;
-        const mat = new THREE.MeshStandardMaterial({ color: PLANET_COLORS[it.name] ?? 0xe5e7eb, roughness: 0.95, metalness: 0 });
-        const mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 40, 28), mat);
-        mesh.rotation.x = Math.PI / 2; // texture poles along +z
+      if (kind === "moon") {
+        const sys = it.parent ? moonSystems.get(parentIdOf(it.parent)) : undefined;
+        if (!sys || !it.rel) continue;
+        const major = MAJOR_MOONS.has(it.name);
+        const mr = sys.radius * (major ? 0.16 : 0.07);
+        const mesh = new THREE.Mesh(new THREE.SphereGeometry(mr, major ? 20 : 8, major ? 14 : 6), new THREE.MeshStandardMaterial({ color: MOON_COLORS[it.name] ?? (major ? 0xd1d5db : 0x9ca3af), roughness: 1, metalness: 0 }));
         mesh.userData.id = it.id;
-        const spin = new THREE.Group();
-        spin.add(mesh);
-        const tilt = new THREE.Group();
-        tilt.rotation.x = -(TILT_DEG[it.name] ?? 0) * D2R;
-        tilt.add(spin);
-        const file = TEXTURES[it.name];
-        if (file) {
-          loadTexture(`${file}.jpg`)
-            .then((t) => {
-              mat.map = t;
-              mat.color.set(0xffffff);
-              mat.needsUpdate = true;
-              S.dirty = true;
-            })
-            .catch(() => {});
-        }
-        if (it.name === "Saturn") {
-          const ringMat = new THREE.MeshBasicMaterial({ color: 0xd9c9a3, side: THREE.DoubleSide, transparent: true, opacity: 0.85, depthWrite: false });
-          const ring = new THREE.Mesh(ringGeometry(r * 1.25, r * 2.3), ringMat);
-          ring.userData.id = it.id;
-          tilt.add(ring);
-          S.pickables.push(ring);
-          loadTexture("saturn_ring_alpha.png")
-            .then((t) => {
-              ringMat.map = t;
-              ringMat.alphaMap = t;
-              ringMat.color.set(0xffffff);
-              ringMat.needsUpdate = true;
-              S.dirty = true;
-            })
-            .catch(() => {});
-        }
-        h.root = tilt;
-        h.spin = spin;
-        h.mesh = mesh;
-        S.content.add(tilt);
+        mesh.userData.group = sys.group;
+        sys.group.add(mesh);
         S.pickables.push(mesh);
-        h.label = makeLabel(it.id === "earth" ? "Earth (you are here)" : it.name, "planet");
-        S.labelGroup.add(h.label);
-        if (it.orbit && prefs.orbits) {
-          h.orbitLine = lineOf(it.orbit, PLANET_COLORS[it.name] ?? 0x64748b, 0.45, true, scale);
-          h.orbitLine.userData.id = it.id;
-          h.orbitSrc = it.orbit;
-          S.content.add(h.orbitLine);
-          S.pickables.push(h.orbitLine);
-          S.lines.set(it.id, h.orbitLine);
+        h.moonMesh = mesh;
+        h.parentId = sys.parentId;
+        h.radius = mr;
+        if (major) {
+          h.label = makeLabel(it.name, "moon");
+          h.label.visible = false;
+          sys.group.add(h.label);
         }
       } else {
         h.point = smallIds.length;
@@ -536,18 +707,20 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
         smallCol.push(c.r, c.g, c.b);
         const o = it.hzId ? orbits.get(it.hzId) : undefined;
         let line: THREE.Line | null = null;
-        if (o?.elements && prefs.orbits) {
+        if (o?.elements) {
           const path = conicPath(o.elements, kind === "interstellar" || kind === "comet" ? 320 : 160);
-          if (path.length > 2) line = lineOf(path, KIND_COLORS[kind], kind === "asteroid" || kind === "neo" ? 0.14 : 0.32, o.elements.e < 1, scale);
-        } else if (o?.trail && prefs.trails) {
+          if (path.length > 2) line = lineOf(path, KIND_COLORS[kind], kind === "asteroid" || kind === "neo" ? 0.16 : 0.34, o.elements.e < 1, scale);
+        } else if (o?.trail) {
           const pts = o.trail.rows.map((r) => ({ x: r[0], y: r[1], z: r[2] }));
           if (pts.length > 1) line = lineOf(pts, KIND_COLORS.probe, 0.45, false, scale);
         }
         if (line) {
           line.userData.id = it.id;
+          line.userData.trail = !!(o?.trail && !o.elements);
           S.content.add(line);
           S.pickables.push(line);
           S.lines.set(it.id, line);
+          S.smallLines.add(it.id);
           h.orbitLine = line;
         }
       }
@@ -564,9 +737,23 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
       S.small = pts;
     }
     S.pointIds = smallIds;
+    setLabelsVisible(S.labelGroup, prefs.labels);
     S.dirty = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [structureKey, orbits, prefs.scale, prefs.orbits, prefs.trails, kindsKey, ready]);
+  }, [structureKey, orbits, prefs.scale, prefs.orbits, prefs.atmospheres, kindsKey, ready]);
+
+  // Small-body orbits and spacecraft trails show on demand (hovered or selected) unless switched on for all.
+  useEffect(() => {
+    const S = sceneRef.current;
+    if (!S || !ready) return;
+    for (const id of S.smallLines) {
+      const line = S.lines.get(id);
+      if (!line) continue;
+      const always = line.userData.trail ? prefs.trails : prefs.smallOrbits;
+      line.visible = always || id === selectedId || id === hoverId;
+    }
+    S.dirty = true;
+  }, [prefs.smallOrbits, prefs.trails, selectedId, hoverId, structureKey, orbits, kindsKey, ready]);
 
   // Move everything to its current position and spin the planets (every tick). Writes into existing objects only.
   useEffect(() => {
@@ -576,6 +763,8 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
     const posAttr = S.small?.geometry.getAttribute("position") as THREE.BufferAttribute | undefined;
     const arr = posAttr?.array as Float32Array | undefined;
     const gast = A.SiderealTime(makeTime(now)) * 15 * D2R; // Greenwich sidereal angle, radians
+    const sysById = new Map<string, MoonSystem>();
+    for (const m of S.moons) sysById.set(m.parentId, m);
     for (const it of items) {
       const h = S.handles.get(it.id);
       if (!h) continue;
@@ -584,10 +773,25 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
         p = new THREE.Vector3();
         S.positions.set(it.id, p);
       }
+      if (h.moonMesh && h.parentId) {
+        // Moons sit around their planet at a compressed distance so the whole family fits on screen.
+        const sys = sysById.get(h.parentId);
+        const pp = S.positions.get(h.parentId);
+        if (!sys || !pp || !it.rel) continue;
+        const dist = Math.hypot(it.rel.x, it.rel.y, it.rel.z);
+        const ratio = Math.max(1.5, dist / sys.radiusAu);
+        const sceneDist = sys.radius * (1.3 + 1.15 * Math.log10(ratio));
+        tmp2.set(it.rel.x, it.rel.y, it.rel.z).normalize().multiplyScalar(sceneDist);
+        h.moonMesh.position.copy(tmp2);
+        h.label?.position.copy(tmp2);
+        p.copy(pp).add(tmp2);
+        continue;
+      }
       scale(it.pos, p);
       if (h.root && h.spin) {
         h.root.position.copy(p);
         h.label?.position.copy(p);
+        sysById.get(it.id)?.group.position.copy(p);
         const hours = SPIN_HOURS[it.name];
         h.spin.rotation.z = it.id === "earth" ? gast : hours ? ((now / 3600e3 / hours) * Math.PI * 2) % (Math.PI * 2) : 0;
         if (h.orbitLine && it.orbit && it.orbit !== h.orbitSrc) {
@@ -609,8 +813,18 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
       posAttr.needsUpdate = true;
       S.small.geometry.computeBoundingSphere();
     }
+    // Follow: keep the selected body under the camera as it moves.
+    if (follow && selectedId) {
+      const p = S.positions.get(selectedId);
+      if (p) {
+        tmp.subVectors(p, S.controls.target);
+        S.camera.position.add(tmp);
+        S.controls.target.copy(p);
+        S.controls.update();
+      }
+    }
     S.dirty = true;
-  }, [items, now, prefs.scale, ready]);
+  }, [items, now, prefs.scale, follow, selectedId, ready]);
 
   // Highlight the selected body (and its orbit) and label the hovered body or orbit.
   useEffect(() => {
@@ -620,7 +834,10 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
     S.selectedLine = (selectedId && S.lines.get(selectedId)) || null;
     setLineOpacity(S.selectedLine, 3);
     const sel = selectedId ? S.positions.get(selectedId) : undefined;
+    const selHandle = selectedId ? S.handles.get(selectedId) : undefined;
     if (sel) {
+      const r = Math.max(0.12, (selHandle?.radius ?? 1) * 1.35);
+      S.highlight.scale.setScalar(r / 3.5);
       S.highlight.position.copy(sel);
       S.highlight.lookAt(S.camera.position);
       S.highlight.visible = true;
@@ -629,35 +846,36 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
     setLineOpacity(S.hoveredLine, 1);
     S.hoveredLine = null;
     const it = hoverId ? propsRef.current.items.find((i) => i.id === hoverId) : undefined;
-    const onLine = hoverId && S.hoverHit?.id === hoverId && S.lines.has(hoverId) && !S.pickables.some((o) => o.userData.id === hoverId && !(o instanceof THREE.Line));
-    const pos = hoverId ? (S.hoverHit?.id === hoverId && S.lines.has(hoverId) && !(S.handles.get(hoverId)?.mesh) ? S.hoverHit.point : S.positions.get(hoverId)) : undefined;
+    const hitIsLine = !!(hoverId && S.hoverHit?.id === hoverId && S.lines.has(hoverId) && !S.handles.get(hoverId)?.mesh);
+    const pos = hoverId ? (hitIsLine && S.hoverHit ? S.hoverHit.point : S.positions.get(hoverId)) : undefined;
     if (it && pos) {
       if (S.lines.has(it.id)) {
         S.hoveredLine = S.lines.get(it.id) ?? null;
         setLineOpacity(S.hoveredLine, 3);
       }
       const kind = kindOf(it);
-      const what = onLine ? (kind === "probe" ? "trajectory" : "orbit") : SOLAR_KINDS.find((k) => k.id === kind)?.label.replace(/s$/, "").toLowerCase() ?? "";
-      S.hoverLabel.position.copy(S.hoverHit?.id === it.id && S.hoverHit ? S.hoverHit.point : pos);
+      const what = hitIsLine ? (kind === "probe" ? "trajectory" : "orbit") : kind === "moon" ? `moon of ${it.parent ?? "?"}` : (SOLAR_KINDS.find((k) => k.id === kind)?.label.replace(/s$/, "").toLowerCase() ?? "");
+      S.hoverLabel.position.copy(pos);
       S.hoverLabel.element.textContent = `${it.name} · ${what} · ${it.id === "earth" ? "you are here" : formatDistance(it.distanceKm, propsRef.current.unit)}`;
       S.hoverLabel.visible = true;
     } else S.hoverLabel.visible = false;
     S.dirty = true;
   }, [selectedId, hoverId, items, ready]);
 
-  const view = (preset: "top" | "3d" | "focus" | "reset") => {
+  const view = (preset: "top" | "3d" | "focus") => {
     const S = sceneRef.current;
     if (!S) return;
     if (preset === "focus") {
       const p = selectedId ? S.positions.get(selectedId) : undefined;
       if (!p) return;
       const h = selectedId ? S.handles.get(selectedId) : undefined;
-      const dist = Math.max(4, (h?.radius ?? 0.5) * 7);
+      const dist = Math.max(0.5, (h?.radius ?? 0.5) * (h?.moonMesh ? 12 : 7));
       const dir = new THREE.Vector3().subVectors(S.camera.position, S.controls.target).normalize();
       if (dir.lengthSq() < 1e-6) dir.set(0.5, -0.7, 0.5).normalize();
       S.controls.target.copy(p);
       S.camera.position.copy(p).addScaledVector(dir, dist);
     } else {
+      setFollow(false);
       S.controls.target.set(0, 0, 0);
       if (preset === "top") S.camera.position.set(0, -0.5, 300);
       else S.camera.position.set(150, -190, 120);
@@ -665,6 +883,7 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
     S.controls.update();
     S.dirty = true;
   };
+  const canFocus = !!selectedId && !!sceneRef.current?.positions.has(selectedId);
 
   return (
     <div className="solar3d" ref={wrapRef} role="application" aria-label="Solar system">
@@ -684,10 +903,19 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
             ))}
             <div className="menu-sep" />
             <label className="menu-item">
-              <input type="checkbox" checked={prefs.orbits} onChange={(e) => onPrefs({ orbits: e.target.checked })} /> Orbit paths
+              <input type="checkbox" checked={prefs.orbits} onChange={(e) => onPrefs({ orbits: e.target.checked })} /> Planet orbits
+            </label>
+            <label className="menu-item" title="Off: the orbit of a small body appears when you hover or select it">
+              <input type="checkbox" checked={prefs.smallOrbits} onChange={(e) => onPrefs({ smallOrbits: e.target.checked })} /> All small-body orbits
+            </label>
+            <label className="menu-item" title="Off: a spacecraft's path appears when you hover or select it">
+              <input type="checkbox" checked={prefs.trails} onChange={(e) => onPrefs({ trails: e.target.checked })} /> Spacecraft trajectories
+            </label>
+            <label className="menu-item" title="Moons appear around a planet when you fly close to it (select it and press Focus)">
+              <input type="checkbox" checked={prefs.moons} onChange={(e) => onPrefs({ moons: e.target.checked })} /> Moons when close
             </label>
             <label className="menu-item">
-              <input type="checkbox" checked={prefs.trails} onChange={(e) => onPrefs({ trails: e.target.checked })} /> Spacecraft trajectories
+              <input type="checkbox" checked={prefs.atmospheres} onChange={(e) => onPrefs({ atmospheres: e.target.checked })} /> Atmospheres
             </label>
             <label className="menu-item">
               <input type="checkbox" checked={prefs.labels} onChange={(e) => onPrefs({ labels: e.target.checked })} /> Labels
@@ -711,8 +939,21 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
       <div className="s3d-toolbar">
         <button type="button" onClick={() => view("top")}>Top-down</button>
         <button type="button" onClick={() => view("3d")}>3D</button>
-        <button type="button" onClick={() => view("focus")} disabled={!selectedId || !sceneRef.current?.positions.has(selectedId)} title="Move the camera to the selected body">
+        <button type="button" onClick={() => view("focus")} disabled={!canFocus} title="Move the camera to the selected body">
           Focus
+        </button>
+        <button
+          type="button"
+          className={follow ? "on" : ""}
+          aria-pressed={follow}
+          disabled={!canFocus && !follow}
+          onClick={() => {
+            if (!follow) view("focus");
+            setFollow((f) => !f);
+          }}
+          title="Keep the camera on the selected body as it moves"
+        >
+          Follow
         </button>
       </div>
       <div className="solar-legend">
@@ -728,7 +969,7 @@ export default function SolarSystem3D({ items, orbits, selectedId, hoverId, unit
         <span>
           <i className="lg-neo" /> close-approach asteroid
         </span>
-        <span className="muted">drag to orbit · wheel to zoom · right-drag to pan · hover an orbit to see whose it is · click for details</span>
+        <span className="muted">drag to orbit · wheel to zoom · right-drag to pan · hover a body or orbit to see whose it is · fly close to a planet for its moons</span>
       </div>
       {lost && (
         <div className="lost">
