@@ -154,13 +154,18 @@ to fill Horizons tables in the background while the app is already usable.
   on the table filter. Deep-sky labels are limited to curated objects that are not quasars or
   pulsars; compass labels sit at altitude −5.5°, so keep the dome radius at `min(w,h)/2 − 34`.
 - SolarSystem3D: three.js `Raycaster` ignores `visible`, so `pick()` filters candidates itself;
-  `CSS2DRenderer` honours only an object's own `visible`, so `setLabelsVisible()` traverses. Only
-  the planet system nearest the camera (within 16 display radii) is shown. Moon offsets must be
-  geometric and planet-relative from the same source (`Target.rel`, see ARCHITECTURE "Planet
-  systems"); `A.GeoVector` with its light-time and aberration corrections put Phobos 60° and Charon
-  168° away from their true directions, and astronomy-engine's outer-planet positions are too coarse
-  for moons (Charon came out 150,000 km from Pluto), so moons wait for the planet's Horizons table. Planet orientation comes from `A.RotationAxis`; the texture's poles are along the
-  body frame's +z and its prime meridian along +x.
+  `CSS2DRenderer` honours only an object's own `visible`, so `setLabelsVisible()` traverses, and all
+  labels live in `labelScene` so the label pass never walks the 3D content. One planet system is shown
+  at a time: the selected body's when the camera is within 16 display radii, else the nearest.
+  OrbitControls applies wheel zoom inside its own handler, so the loop's `controls.update()` reports
+  no change: its 'change' event must mark the scene dirty or zoom shows only at the next tick.
+  Moon offsets must be geometric and planet-relative from the same source (`Target.rel`, see
+  ARCHITECTURE "Planet systems"); `A.GeoVector` with its light-time and aberration corrections put
+  Phobos 60° and Charon 168° away from their true directions, and astronomy-engine's outer-planet
+  positions are too coarse for moons (Charon came out 150,000 km from Pluto), so moons wait for the
+  planet's Horizons table. Planet orientation comes from `A.RotationAxis`; the texture's poles are
+  along the body frame's +z and its prime meridian along +x. `?debug` exposes the scene as
+  `window.__solar`.
 - Horizons tables of kind `planet` (199…999) are reference vectors for moon offsets, not targets;
   `useSpaceTargets` filters them out and the footer does not count them.
 - Headless verification: `scratchpad/cdp.mjs`-style DevTools scripting (Chrome with
