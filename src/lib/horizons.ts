@@ -1,5 +1,5 @@
 // Client-side handling of the NASA Horizons vector tables served by /api/horizons.
-export type BodyKind = "probe" | "dwarf" | "asteroid" | "tno" | "centaur" | "comet" | "interstellar" | "moon" | "neo";
+export type BodyKind = "planet" | "probe" | "dwarf" | "asteroid" | "tno" | "centaur" | "comet" | "interstellar" | "moon" | "neo";
 
 export interface BodyTable {
   id: string;
@@ -33,6 +33,7 @@ export interface State6 {
 }
 
 export const KIND_LABELS: Record<BodyKind, string> = {
+  planet: "Planet",
   probe: "Spacecraft",
   dwarf: "Dwarf planet",
   asteroid: "Asteroid",
@@ -44,9 +45,40 @@ export const KIND_LABELS: Record<BodyKind, string> = {
   neo: "Near-Earth flyby",
 };
 
-/** Cubic Hermite interpolation between hourly rows using the tabulated velocities. */
-export function interpolate(t: BodyTable, tMs: number): State6 | null {
+/**
+ * How far outside its table a body may be extrapolated before its position is treated as unknown. Linear
+ * extrapolation of a moon goes wrong within hours (it is orbiting), a close-approach asteroid within a day;
+ * everything else moves in near-straight lines relative to Earth for a few days. Tables normally never run out
+ * (the server refreshes them with 12 h to spare); this guards a restart with an old cache or a long outage.
+ */
+export const MAX_OUTSIDE_MS: Record<BodyKind, number> = {
+  planet: 2 * 3600e3,
+  moon: 1 * 3600e3,
+  neo: 6 * 3600e3,
+  probe: 72 * 3600e3,
+  dwarf: 72 * 3600e3,
+  asteroid: 72 * 3600e3,
+  tno: 72 * 3600e3,
+  centaur: 72 * 3600e3,
+  comet: 72 * 3600e3,
+  interstellar: 72 * 3600e3,
+};
+
+/** Milliseconds by which `tMs` lies outside the table's time span (0 inside it, Infinity without data). */
+export function outsideMs(t: BodyTable, tMs: number): number {
+  if (t.status !== "ok" || !t.rows || t.rows.length < 2 || t.t0 === undefined || !t.stepSec) return Infinity;
+  const end = t.t0 + t.stepSec * 1000 * (t.rows.length - 1);
+  return tMs < t.t0 ? t.t0 - tMs : tMs > end ? tMs - end : 0;
+}
+
+/**
+ * Cubic Hermite interpolation between hourly rows using the tabulated velocities. Outside the table it
+ * extrapolates linearly from the nearest row, but returns null once `tMs` is more than `maxOutsideMs`
+ * beyond either end.
+ */
+export function interpolate(t: BodyTable, tMs: number, maxOutsideMs = Infinity): State6 | null {
   if (t.status !== "ok" || !t.rows || t.rows.length < 2 || t.t0 === undefined || !t.stepSec) return null;
+  if (outsideMs(t, tMs) > maxOutsideMs) return null;
   const rows = t.rows;
   const h = t.stepSec;
   const f = (tMs - t.t0) / (h * 1000);

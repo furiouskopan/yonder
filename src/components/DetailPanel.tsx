@@ -100,7 +100,7 @@ export default function DetailPanel({ target: t, origin, unit, sky, description,
   if (dir.text) facts.push([cat.realm === "earth" ? "Compass bearing" : "Where to look", dir.text + (dir.cls === "up" ? " (above your horizon)" : dir.cls === "down" ? " (below the horizon)" : "")]);
   if (t.lat !== undefined && cat.realm === "earth" && d > 500) facts.push(["Straight line through Earth", formatDistance(chordKm(d), unit)]);
   if (t.rateKms !== undefined) facts.push(["Approach", formatRate(t.rateKms)]);
-  if (t.speedKms !== undefined && Number.isFinite(t.speedKms)) facts.push(["Speed", t.speedKms < 0.5 ? `${Math.round(t.speedKms * 3600)} km/h` : `${t.speedKms.toFixed(2)} km/s`]);
+  if (t.speedKms !== undefined && Number.isFinite(t.speedKms)) facts.push([t.speedRef ? `Speed relative to ${t.speedRef}` : "Speed", t.speedKms < 0.5 ? `${Math.round(t.speedKms * 3600)} km/h` : `${t.speedKms.toFixed(2)} km/s`]);
   if (t.lat !== undefined && t.lon !== undefined) facts.push(["Coordinates", `${t.lat.toFixed(4)}°, ${t.lon.toFixed(4)}°`]);
   if (t.subLat !== undefined && t.subLon !== undefined) facts.push(["Currently above", `${t.subLat.toFixed(2)}°, ${t.subLon.toFixed(2)}°`]);
   if (t.heightKm !== undefined && t.category === "satellite") facts.push(["Height", `${nf0.format(Math.round(t.heightKm))} km`]);

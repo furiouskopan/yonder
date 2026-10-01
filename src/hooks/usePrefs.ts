@@ -7,7 +7,7 @@ export type ThemePref = "auto" | "light" | "dark";
 export type PaneId = "table" | "map" | "solar" | "sky";
 export type SidePane = Exclude<PaneId, "table">;
 export type ColumnId = "rank" | "type" | "light" | "direction" | "approach" | "details";
-export type SolarKind = "planet" | "moon" | "dwarf" | "tno" | "centaur" | "asteroid" | "comet" | "interstellar" | "neo" | "probe";
+export type SolarKind = "planet" | "moon" | "satellite" | "dwarf" | "tno" | "centaur" | "asteroid" | "comet" | "interstellar" | "neo" | "probe";
 
 export interface LayoutPrefs {
   split: number; // fraction of the main area given to the table column
@@ -34,7 +34,6 @@ export interface SolarPrefs {
   orbits: boolean; // planet orbits
   smallOrbits: boolean; // orbits of asteroids, comets and other small bodies (the selected one always shows)
   trails: boolean;
-  moons: boolean;
   atmospheres: boolean;
   labels: boolean;
   skybox: boolean;
@@ -94,6 +93,7 @@ export const COLUMNS: { id: ColumnId; label: string }[] = [
 export const SOLAR_KINDS: { id: SolarKind; label: string }[] = [
   { id: "planet", label: "Planets" },
   { id: "moon", label: "Moons" },
+  { id: "satellite", label: "Earth's satellites" },
   { id: "dwarf", label: "Dwarf planets" },
   { id: "asteroid", label: "Asteroids" },
   { id: "tno", label: "Trans-Neptunian objects" },
@@ -117,13 +117,12 @@ export const DEFAULT_LAYOUT: LayoutPrefs = {
   collapsed: { table: false, map: false, solar: false, sky: true },
 };
 export const DEFAULT_GLOBE: GlobePrefs = { sats: true, aircraft: true, vehicles: true, places: true, track: true, footprint: true, labels: true, autoRotate: false, texture: "auto", pointSize: 1 };
-const SOLAR_KINDS_ON_BY_DEFAULT: SolarKind[] = ["planet", "moon", "dwarf", "comet", "interstellar", "probe"];
+const SOLAR_KINDS_ON_BY_DEFAULT: SolarKind[] = ["planet", "moon", "satellite", "dwarf", "comet", "interstellar", "probe"];
 export const DEFAULT_SOLAR: SolarPrefs = {
   scale: "log",
   orbits: true,
   smallOrbits: false,
   trails: false,
-  moons: true,
   atmospheres: true,
   labels: true,
   skybox: true,

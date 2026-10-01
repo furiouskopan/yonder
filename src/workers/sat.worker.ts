@@ -93,7 +93,7 @@ function tick(t: number): void {
 
 function track(m: Extract<InMsg, { type: "track" }>): void {
   const rec = recs[m.index];
-  const points: [number, number][] = [];
+  const points: [number, number, number][] = [];
   if (rec) {
     const half = (m.minutes * 60e3) / 2;
     for (let dt = -half; dt <= half; dt += m.stepSec * 1000) {
@@ -103,7 +103,7 @@ function track(m: Extract<InMsg, { type: "track" }>): void {
         const pos = pv?.position;
         if (!isVec(pos)) continue;
         const gd = S.eciToGeodetic(pos, S.gstime(date));
-        points.push([gd.latitude * R2D, gd.longitude * R2D]);
+        points.push([gd.latitude * R2D, gd.longitude * R2D, gd.height]);
       } catch {
         /* skip */
       }

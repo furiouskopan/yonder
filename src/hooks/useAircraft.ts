@@ -111,6 +111,7 @@ export function useAircraft(now: number, origin: Origin, enabled: boolean): { ta
         azDeg: look.azDeg,
         heading: a.track ?? undefined,
         speedKms,
+        speedRef: "the ground",
         note: `${formatAltitudeFt(altFt)}${a.gsKts ? ` · ${Math.round(a.gsKts)} kts` : ""}${a.track !== null ? ` · heading ${Math.round(a.track)}°` : ""}`,
         kind: a.onGround ? "ground" : "airborne",
         facts: [

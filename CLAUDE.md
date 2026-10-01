@@ -86,6 +86,22 @@ The client holds ~320k targets in memory and re-renders once a second. Keep thes
   into existing buffers. Point layers in `GlobeView` allocate with spare capacity and use
   `setDrawRange`; when they must grow, dispose the geometry first. Replacing attributes without
   disposing leaked GPU memory on every count change and eventually lost the WebGL context.
+- Never feed per-tick data to globe.gl data layers (`pathsData`, `ringsData`, `pointsData`...): they
+  rebuild their objects on every change and three.js recompiles the shaders of the new materials
+  (an effect that depended on a satellite's height compiled four programs a second). Draw anything
+  that moves with the app's own point layers. Keep globe.gl's pointer interaction off.
+- Never change the renderer's pixel ratio or size during interaction: it reallocates the canvas
+  (100+ ms stalls per zoom gesture were measured when the solar view did it to save fill rate).
+- A `ShaderMaterial` writing colours must end with `#include <colorspace_fragment>`; `THREE.Color`
+  values are linear and come out far too dark otherwise.
+- The server's `refreshing` flags must only be true while fetches actually run (`staleBodies` /
+  `staleOrbits` decide synchronously): when they were always true, every open tab re-downloaded
+  1.4 MB every 20 s and rebuilt the solar scene every 45 s. `/api/horizons` and `/api/orbits` carry
+  a version ETag with `no-cache`, so browsers revalidate with a 304; `useHorizons`/`useOrbits` keep
+  the previous array/Map when nothing changed (a new `orbits` Map rebuilds the orbit lines).
+- Speeds carry `Target.speedRef`: heliocentric for interplanetary bodies, relative to the planet for
+  moons and for anything inside a planet's sphere of influence (JWST 0.5 km/s, not Earth's 30).
+  Distances are geometric (where the body is now) for every body; directions are apparent.
 - Avoid `Intl.NumberFormat` construction in render paths; the formatters in `lib/units.ts` are
   cached.
 - Do not add formatted strings to the 300k static targets (notes, Wikipedia hints, fact lists).
@@ -138,9 +154,15 @@ to fill Horizons tables in the background while the app is already usable.
   on the table filter. Deep-sky labels are limited to curated objects that are not quasars or
   pulsars; compass labels sit at altitude −5.5°, so keep the dome radius at `min(w,h)/2 − 34`.
 - SolarSystem3D: three.js `Raycaster` ignores `visible`, so `pick()` filters candidates itself;
-  `CSS2DRenderer` honours only an object's own `visible`, so `setLabelsVisible()` traverses. Moon
-  groups appear within 14 planet radii of the camera; with the log scale the inner planets are
-  only tens of scene units apart, so a larger threshold shows Saturn's moons from Earth.
+  `CSS2DRenderer` honours only an object's own `visible`, so `setLabelsVisible()` traverses. Only
+  the planet system nearest the camera (within 16 display radii) is shown. Moon offsets must be
+  geometric and planet-relative from the same source (`Target.rel`, see ARCHITECTURE "Planet
+  systems"); `A.GeoVector` with its light-time and aberration corrections put Phobos 60° and Charon
+  168° away from their true directions, and astronomy-engine's outer-planet positions are too coarse
+  for moons (Charon came out 150,000 km from Pluto), so moons wait for the planet's Horizons table. Planet orientation comes from `A.RotationAxis`; the texture's poles are along the
+  body frame's +z and its prime meridian along +x.
+- Horizons tables of kind `planet` (199…999) are reference vectors for moon offsets, not targets;
+  `useSpaceTargets` filters them out and the footer does not count them.
 - Headless verification: `scratchpad/cdp.mjs`-style DevTools scripting (Chrome with
   `--use-angle=swiftshader`, 1250×820) renders all views; use `?open=` and `?select=` to reach
   states, click toolbar buttons through `Runtime.evaluate`.

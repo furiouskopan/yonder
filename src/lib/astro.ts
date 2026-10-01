@@ -57,17 +57,41 @@ export function helioEclipticOf(body: A.Body, time: A.AstroTime): Vec3 {
 }
 
 export interface SolarState {
-  distKm: number;
-  alt: number;
+  distKm: number; // geometric distance from the observer at this instant
+  alt: number; // apparent direction (light time and aberration): where to look
   az: number;
-  helio: Vec3 | null;
+  helio: Vec3 | null; // heliocentric ecliptic J2000, AU (null for the Moon)
+  speedKms: number; // relative to the Sun; the Moon's relative to Earth; NaN for the Sun
 }
 
-export function solarBodyState(def: SolarBodyDef, time: A.AstroTime, observer: A.Observer): SolarState {
+export const AU_PER_DAY_TO_KMS = KM_PER_AU / 86400;
+
+/**
+ * Distance is geometric, "where it is now", the same convention as the Horizons bodies (their tables are
+ * geometric too). The apparent distance from A.Equator(..., aberration) mixes light time and aberration and
+ * is neither: it put Mars 25,000 km off the geometric value.
+ */
+export function solarBodyState(def: SolarBodyDef, time: A.AstroTime, observer: A.Observer, earth: A.Vector, obsAu: Vec3): SolarState {
   const eq = A.Equator(def.body, time, observer, true, true);
   const hz = A.Horizon(time, observer, eq.ra, eq.dec, "normal");
-  const helio = def.body === A.Body.Moon ? null : helioEclipticOf(def.body, time);
-  return { distKm: eq.dist * KM_PER_AU, alt: hz.altitude, az: hz.azimuth, helio };
+  let gx: number, gy: number, gz: number, speedKms: number;
+  let helio: Vec3 | null = null;
+  if (def.body === A.Body.Moon) {
+    const m = A.GeoMoonState(time);
+    gx = m.x;
+    gy = m.y;
+    gz = m.z;
+    speedKms = Math.hypot(m.vx, m.vy, m.vz) * AU_PER_DAY_TO_KMS;
+  } else {
+    const s = A.HelioState(def.body, time);
+    gx = s.x - earth.x;
+    gy = s.y - earth.y;
+    gz = s.z - earth.z;
+    speedKms = def.body === A.Body.Sun ? NaN : Math.hypot(s.vx, s.vy, s.vz) * AU_PER_DAY_TO_KMS;
+    helio = toEcliptic(new A.Vector(s.x, s.y, s.z, time));
+  }
+  const distKm = Math.hypot(gx - obsAu.x, gy - obsAu.y, gz - obsAu.z) * KM_PER_AU;
+  return { distKm, alt: hz.altitude, az: hz.azimuth, helio, speedKms };
 }
 
 /** Altitude and azimuth of a body from its topocentric ICRF vector (km). */

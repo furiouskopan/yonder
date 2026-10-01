@@ -75,11 +75,14 @@ function spectralIndex(spect: string | undefined): number {
   }
 }
 
+/** Stars, including curated multiple-star systems (Sirius, Procyon, Capella) that took over their catalogue rows. */
+const isStar = (t: Target): boolean => t.kind === "Star" || (t.kind === "Star system" && t.mag !== undefined);
+
 function buildStars(fixed: Target[], magLimit: number): StarIndex {
   const idx: number[] = [];
   for (let i = 0; i < fixed.length; i++) {
     const t = fixed[i];
-    if (t.kind !== "Star" || t.ra === undefined || t.dec === undefined || t.mag === undefined || t.mag > magLimit) continue;
+    if (!isStar(t) || t.ra === undefined || t.dec === undefined || t.mag === undefined || t.mag > magLimit) continue;
     idx.push(i);
   }
   const n = idx.length;
@@ -100,7 +103,8 @@ function buildDeep(fixed: Target[]): number[] {
   const out: number[] = [];
   for (let i = 0; i < fixed.length; i++) {
     const t = fixed[i];
-    if (t.category !== "star" || t.kind === "Star" || t.ra === undefined || t.dec === undefined) continue;
+    // Stars and multiple stars are drawn by the star pass (or, without a magnitude, not at all), never as diamonds.
+    if (t.category !== "star" || t.kind === "Star" || t.kind === "Star system" || t.ra === undefined || t.dec === undefined) continue;
     if (t.id.startsWith("dso-") || (t.mag !== undefined && t.mag <= 8.5)) out.push(i);
   }
   return out;
@@ -123,7 +127,14 @@ function skyWord(sunAlt: number): string {
 export default function SkyView({ now, origin, fixed, bodies, sats, aircraft, selected, hoverId, unit, dark, prefs, onPrefs, onSelect, onHover }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null); // hover and selection rings, redrawn on their own
   const hitsRef = useRef<Hit[]>([]);
+  // The dome redraws once per clock tick from the latest data; satellites arrive from the worker in a commit of
+  // their own and hover changes come from every pane, so neither should trigger a full redraw of the sky.
+  const dataRef = useRef({ bodies, sats, aircraft });
+  dataRef.current = { bodies, sats, aircraft };
+  const markRef = useRef({ hoverId, selectedId: selected?.id ?? null });
+  markRef.current = { hoverId, selectedId: selected?.id ?? null };
   const byIdRef = useRef(new Map<string, Target>());
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [tip, setTip] = useState<{ x: number; y: number; id: string } | null>(null);
@@ -143,9 +154,40 @@ export default function SkyView({ now, origin, fixed, bodies, sats, aircraft, se
   }, []);
 
   // ---- drawing ----
+  const drawOverlay = useCallback(() => {
+    const c = overlayRef.current;
+    if (!c || size.w === 0 || size.h === 0) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (c.width !== Math.round(size.w * dpr) || c.height !== Math.round(size.h * dpr)) {
+      c.width = Math.round(size.w * dpr);
+      c.height = Math.round(size.h * dpr);
+    }
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, size.w, size.h);
+    const mark = (id: string | null, color: string, r: number) => {
+      if (!id) return;
+      const h = hitsRef.current.find((hh) => hh.id === id);
+      if (!h) return;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, r, 0, Math.PI * 2);
+      ctx.stroke();
+    };
+    mark(markRef.current.hoverId, "#ffffff", 9);
+    mark(markRef.current.selectedId, "#f59e0b", 11);
+  }, [size]);
+
+  useEffect(() => {
+    drawOverlay();
+  }, [hoverId, selected?.id, drawOverlay]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || size.w === 0 || size.h === 0) return;
+    const { bodies, sats, aircraft } = dataRef.current;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     if (canvas.width !== Math.round(size.w * dpr) || canvas.height !== Math.round(size.h * dpr)) {
       canvas.width = Math.round(size.w * dpr);
@@ -403,21 +445,9 @@ export default function SkyView({ now, origin, fixed, bodies, sats, aircraft, se
     ctx.textAlign = "left";
     ctx.textBaseline = "alphabetic";
 
-    // Selection and hover markers.
-    const mark = (id: string | null, color: string, r: number) => {
-      if (!id) return;
-      const h = hits.find((hh) => hh.id === id);
-      if (!h) return;
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.arc(h.x, h.y, r, 0, Math.PI * 2);
-      ctx.stroke();
-    };
-    mark(hoverId, "#ffffff", 9);
-    mark(selected?.id ?? null, "#f59e0b", 11);
     hitsRef.current = hits;
-  }, [now, origin, fixed, bodies, sats, aircraft, selected, hoverId, stars, deep, prefs, size, dark]);
+    drawOverlay();
+  }, [now, origin, fixed, stars, deep, prefs, size, dark, drawOverlay]);
 
   // ---- picking ----
   const pick = useCallback((ev: React.PointerEvent | React.MouseEvent): Hit | null => {
@@ -464,6 +494,7 @@ export default function SkyView({ now, origin, fixed, bodies, sats, aircraft, se
 
   return (
     <div className="sky" ref={wrapRef} role="application" aria-label="Sky view">
+      <canvas ref={overlayRef} className="sky-overlay" style={{ width: size.w, height: size.h }} aria-hidden="true" />
       <canvas
         ref={canvasRef}
         style={{ width: size.w, height: size.h }}

@@ -1801,3 +1801,13 @@ body.resizing-row .splitter.row::after {
   color: #d1d5db;
   opacity: 0.85;
 }
+
+
+/* Sky panel: hover and selection rings are drawn on a canvas of their own above the dome */
+.sky-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 1;
+}

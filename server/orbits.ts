@@ -129,19 +129,29 @@ export function loadOrbitsFromDisk(): void {
   }
 }
 
+const trailEnd = (o: OrbitInfo): number => (o.trail ? o.trail.t0 + o.trail.stepSec * 1000 * (o.trail.rows.length - 1) : Infinity);
+
+/** Orbits to fetch now: missing, failed, older than their TTL, or a trajectory that ends within two days. */
+function staleOrbits(now: number): HorizonsBody[] {
+  loadOrbitsFromDisk();
+  return allBodies().filter((b) => {
+    if (!wanted(b)) return false;
+    const o = orbits.get(b.id);
+    const ttl = b.kind === "neo" ? NEO_TTL_MS : TTL_MS;
+    const due = !o || o.status !== "ok" || !o.fetchedAt || now - o.fetchedAt > ttl || trailEnd(o) < now + 2 * 86400e3;
+    return due && (nextTry.get(b.id) ?? 0) <= now;
+  });
+}
+
 export function ensureOrbitsRefresh(): Promise<void> {
   if (refreshing) return refreshing;
   // Never run alongside the position-table refresh: Horizons rate-limits parallel clients with 503s.
   if (isRefreshing()) return Promise.resolve();
+  // Start a refresh only when there is work, so the API reports `refreshing` truthfully and browsers poll slowly.
+  if (staleOrbits(Date.now()).length === 0) return Promise.resolve();
   refreshing = (async () => {
-    loadOrbitsFromDisk();
     const now = Date.now();
-    const stale = allBodies().filter((b) => {
-      if (!wanted(b)) return false;
-      const o = orbits.get(b.id);
-      const ttl = b.kind === "neo" ? NEO_TTL_MS : TTL_MS;
-      return (!o || o.status !== "ok" || !o.fetchedAt || now - o.fetchedAt > ttl) && (nextTry.get(b.id) ?? 0) <= now;
-    });
+    const stale = staleOrbits(now);
     if (stale.length === 0) return;
     console.log(`[orbits] refreshing ${stale.length} orbits`);
     await runPool(stale, 1, async (b) => {
@@ -152,6 +162,8 @@ export function ensureOrbitsRefresh(): Promise<void> {
         orbits.set(b.id, info);
         writeCache(keyOf(b.id), info);
         nextTry.delete(b.id);
+        // Horizons may simply have no later ephemeris yet; look again tomorrow rather than on every request.
+        if (trailEnd(info) < Date.now() + 2 * 86400e3) nextTry.set(b.id, Date.now() + 24 * 3600e3);
       } catch (err) {
         const msg = (err as Error).message;
         console.warn(`[orbits] ${b.name}: ${msg}`);

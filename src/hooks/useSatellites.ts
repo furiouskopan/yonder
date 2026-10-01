@@ -141,7 +141,7 @@ export function useSatellites(now: number, origin: Origin, setId: string) {
   const genRef = useRef(0);
   const prevRef = useRef<{ t: number; dist: Float32Array } | null>(null);
   const busyRef = useRef(false);
-  const trackWaiters = useRef(new Map<number, (pts: [number, number][]) => void>());
+  const trackWaiters = useRef(new Map<number, (pts: [number, number, number][]) => void>());
   const passWaiters = useRef(new Map<number, (passes: Pass[]) => void>());
   const [targets, setTargets] = useState<Target[]>([]);
   const [state, setState] = useState<SatState>({ status: "idle", count: 0 });
@@ -160,7 +160,7 @@ export function useSatellites(now: number, origin: Origin, setId: string) {
     w.onmessage = (e: MessageEvent) => {
       const m = e.data as
         | { type: "result"; gen: number; t: number; data: Float32Array }
-        | { type: "track"; norad: number; points: [number, number][] }
+        | { type: "track"; norad: number; points: [number, number, number][] }
         | { type: "passes"; norad: number; passes: Pass[] }
         | { type: "loaded"; gen: number; count: number };
       if (m.type === "result") {
@@ -247,6 +247,7 @@ export function useSatellites(now: number, origin: Origin, setId: string) {
               key: norm(`${s.name} ${CLASS_LABELS[s.cls] ?? ""} ${f?.owner ?? ""}`),
               note: `launched ${f?.launched || launchYear(s.intl)}`,
               kind: s.cls,
+              speedRef: "Earth's centre",
               wiki: wikiHint(s.name),
               facts: [
                 ["NORAD ID", String(s.norad)],
@@ -286,7 +287,7 @@ export function useSatellites(now: number, origin: Origin, setId: string) {
     workerRef.current?.postMessage({ type: "tick", t: now });
   }, [now]);
 
-  const trackOf = useCallback((targetId: string, t: number, minutes = 92): Promise<[number, number][]> => {
+  const trackOf = useCallback((targetId: string, t: number, minutes = 92): Promise<[number, number, number][]> => {
     const norad = Number(targetId.replace("sat-", ""));
     const index = metaRef.current.findIndex((m) => m.norad === norad);
     if (index < 0 || !workerRef.current) return Promise.resolve([]);

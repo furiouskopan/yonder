@@ -5,7 +5,7 @@
 // on disk so the app also works offline after a first run.
 import { readCache, writeCache, sleep } from "./cache";
 
-export type BodyKind = "probe" | "dwarf" | "asteroid" | "tno" | "centaur" | "comet" | "interstellar" | "moon" | "neo";
+export type BodyKind = "planet" | "probe" | "dwarf" | "asteroid" | "tno" | "centaur" | "comet" | "interstellar" | "moon" | "neo";
 
 export interface HorizonsBody {
   id: string; // Horizons COMMAND value
@@ -29,6 +29,19 @@ export const KM_PER_AU = 149_597_870.7;
 const UA = { "User-Agent": "Yonder/0.2 (live distance dashboard)" };
 
 // Verified against Horizons on 2026-09-06.
+// Planet centres. Not shown as targets (the browser computes the planets itself); they give the moons and the
+// spacecraft orbiting a planet an offset from that planet in the same frame and time scale as their own tables.
+export const PLANET_REFS: HorizonsBody[] = [
+  { id: "199", name: "Mercury", kind: "planet" },
+  { id: "299", name: "Venus", kind: "planet" },
+  { id: "499", name: "Mars", kind: "planet" },
+  { id: "599", name: "Jupiter", kind: "planet" },
+  { id: "699", name: "Saturn", kind: "planet" },
+  { id: "799", name: "Uranus", kind: "planet" },
+  { id: "899", name: "Neptune", kind: "planet" },
+  { id: "999", name: "Pluto", kind: "planet" },
+];
+
 export const STATIC_BODIES: HorizonsBody[] = [
   // Deep-space probes and observatories
   { id: "-31", name: "Voyager 1", kind: "probe", note: "Launched 1977 · in interstellar space" },
@@ -187,9 +200,12 @@ const STEP_H = 1;
 const SPAN_H = 48;
 const LEAD_H = 12;
 const RETRY_MS = 30 * 60e3;
+const NO_EPHEMERIS_RETRY_MS = 7 * 24 * 3600e3; // e.g. Daphnis: Horizons has no ephemeris after 2018, so retrying every 30 min is pointless
 const LISTS_TTL_MS = 12 * 3600e3;
 const CONCURRENCY = 2; // Horizons answers 503 when hit with more parallel requests
 const TDB_MINUS_UTC_MS = 69_184; // TT − UTC in 2026 (37 s of leap seconds + 32.184 s)
+
+const REFRESH_ORDER: Record<BodyKind, number> = { planet: 0, neo: 1, moon: 2, probe: 3, interstellar: 4, comet: 5, asteroid: 6, centaur: 7, dwarf: 8, tno: 9 };
 
 const tables = new Map<string, BodyTable>();
 const nextTry = new Map<string, number>();
@@ -201,7 +217,7 @@ let refreshing: Promise<void> | null = null;
 export const keyOf = (id: string): string => `horizons-${id.replace(/[^A-Za-z0-9-]+/g, "_")}`;
 
 export function allBodies(): HorizonsBody[] {
-  return [...STATIC_BODIES, ...moons, ...neos];
+  return [...PLANET_REFS, ...STATIC_BODIES, ...moons, ...neos];
 }
 
 export function fmtUtc(ms: number): string {
@@ -384,12 +400,22 @@ export async function runPool<T>(items: T[], size: number, fn: (item: T) => Prom
 
 export const isRefreshing = (): boolean => refreshing !== null;
 
+/** Bodies whose table needs fetching now. Fast-changing bodies first: after a restart with an old cache the
+ *  browser hides positions it cannot trust, so planet centres, close approaches and moons come back first. */
+function staleBodies(now: number): HorizonsBody[] {
+  return allBodies()
+    .filter((b) => needsRefresh(tables.get(b.id), now) && (nextTry.get(b.id) ?? 0) <= now)
+    .sort((a, b) => REFRESH_ORDER[a.kind] - REFRESH_ORDER[b.kind]);
+}
+
 export function ensureRefresh(): Promise<void> {
   if (refreshing) return refreshing;
+  // Start a refresh only when there is work. Creating one unconditionally made every response report
+  // `refreshing: true`, so browsers polled the 1.4 MB table set every 20 s instead of every 10 min.
+  if (Date.now() - listsLoadedAt < LISTS_TTL_MS && staleBodies(Date.now()).length === 0) return Promise.resolve();
   refreshing = (async () => {
     await refreshLists();
-    const now = Date.now();
-    const stale = allBodies().filter((b) => needsRefresh(tables.get(b.id), now) && (nextTry.get(b.id) ?? 0) <= now);
+    const stale = staleBodies(Date.now());
     if (stale.length === 0) return;
     console.log(`[horizons] refreshing ${stale.length} of ${allBodies().length} bodies`);
     await runPool(stale, CONCURRENCY, async (b) => {
@@ -403,7 +429,7 @@ export function ensureRefresh(): Promise<void> {
         console.warn(`[horizons] ${b.name}: ${msg}`);
         const prev = tables.get(b.id);
         if (!prev || prev.status !== "ok") tables.set(b.id, { ...b, status: "error", error: msg });
-        nextTry.set(b.id, Date.now() + RETRY_MS);
+        nextTry.set(b.id, Date.now() + (/no ephemeris/i.test(msg) ? NO_EPHEMERIS_RETRY_MS : RETRY_MS));
       }
       await sleep(150);
     });

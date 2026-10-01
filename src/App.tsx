@@ -295,7 +295,7 @@ export default function App() {
   const trackTargetId = selected?.category === "satellite" ? selected.id : sats.targets.some((t) => t.id === ISS_ID) ? ISS_ID : null;
   const trackTarget = trackTargetId ? sats.targets.find((t) => t.id === trackTargetId) : undefined;
   const trackMinute = Math.floor(now / 60_000);
-  const [track, setTrack] = useState<{ id: string; points: [number, number][] } | null>(null);
+  const [track, setTrack] = useState<{ id: string; points: [number, number, number][] } | null>(null);
   useEffect(() => {
     if (!trackTargetId) {
       setTrack(null);
@@ -365,7 +365,7 @@ export default function App() {
       { id: "earth", name: "Earth", pos: space.earthHelio, kind: "Planet", category: "solar", distanceKm: 0, orbit: planetOrbits.get("Earth"), radiusKm: 6371 },
     ];
     for (const t of space.targets) {
-      if (!t.helio || t.name === "Sun") continue;
+      if (!t.helio) continue;
       const def = SOLAR_BODIES.find((d) => d.name === t.name);
       items.push({
         id: t.id,
@@ -377,15 +377,17 @@ export default function App() {
         orbit: planetOrbits.get(t.name),
         hzId: t.id.startsWith("hz-") ? t.id.slice(3) : undefined,
         radiusKm: def?.radiusKm,
-        parent: t.parent,
+        system: t.system,
         rel: t.rel,
       });
     }
     return items;
   }, [space, planetOrbits]);
 
-  const horizonsReady = horizons.tables.filter((t) => t.status === "ok").length;
-  const trackHeightKm = trackTarget?.heightKm ?? 420;
+  const hzBodies = horizons.tables.filter((t) => t.kind !== "planet"); // planet centres are references, not bodies
+  const horizonsReady = hzBodies.filter((t) => t.status === "ok").length;
+  const trackPoints = track && track.id === trackTargetId ? track.points : null;
+  const trackPairs = useMemo(() => (trackPoints ? trackPoints.map((p): [number, number] => [p[0], p[1]]) : null), [trackPoints]);
   const loading = loadingSets.length > 0;
 
   // ---- layout ----
@@ -435,7 +437,7 @@ export default function App() {
             vehRows={vehRows}
             selected={selected}
             hoverId={hoverId}
-            track={track && track.id === trackTargetId ? track.points : null}
+            track={trackPairs}
             footprint={footprint}
             unit={unit}
             basemap={basemap}
@@ -454,9 +456,8 @@ export default function App() {
               vehicles={vehRows}
               selected={selected}
               hoverId={hoverId}
-              track={track && track.id === trackTargetId ? track.points : null}
+              track={trackPoints}
               footprint={footprint}
-              trackHeightKm={trackHeightKm}
               unit={unit}
               dark={dark}
               pinOnClick={pinOnClick}
@@ -495,6 +496,7 @@ export default function App() {
         <Suspense fallback={<div className="loading">Loading the solar system…</div>}>
           <SolarSystem3D
             items={solarItems}
+            sats={satRows}
             orbits={orbits}
             selectedId={selectedId}
             hoverId={hoverId}
@@ -634,7 +636,7 @@ export default function App() {
         <span>
           {new Date(now).toLocaleTimeString()}
           {!live && " · paused"}
-          {` · Horizons bodies ${horizonsReady}/${horizons.tables.length || "…"}`}
+          {` · Horizons bodies ${horizonsReady}/${hzBodies.length || "…"}`}
           {cats.poi && poiState.status === "loading" && " · finding places nearby…"}
           {cats.poi && poiState.status === "ready" && ` · ${poiState.count} places within ${poiState.radiusKm ?? 22} km`}
           {cats.poi && poiState.status === "error" && ` · nearby places unavailable (${poiState.error})`}

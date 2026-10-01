@@ -52,13 +52,17 @@ working offline (moving objects then drift slowly out of date).
   day/night textures, toggles layers and sets the dot size. Dots are drawn by a small shader and
   the full 13,000-satellite catalogue stays smooth.
 - **Solar system**: drag to orbit, wheel to zoom (towards the cursor), right-drag to pan.
-  Textured, sunlit planets with their real tilts and rotation, atmospheres, Earth's city lights on
-  its night side, Saturn's rings and the Milky Way behind. Select a planet and press Focus to fly
-  to it: its moons appear around it (all 186, the major ones labelled), at their real directions
-  and a compressed distance. Follow keeps the camera on the selected body as it moves. Planet
-  orbits are always drawn; the orbit of an asteroid, comet or spacecraft appears when you hover or
-  select it (Options can show them all). Options filter by kind, toggle moons, atmospheres, labels
-  or the background, and switch between the compressed (logarithmic) and true scale.
+  Textured, sunlit planets oriented and spinning as they really are (IAU rotation model),
+  atmospheres, Earth's city lights on its night side, Saturn's rings and the Milky Way behind.
+  Select a planet and press Focus to fly into its system: its moons (all 186, the major ones
+  labelled), the spacecraft orbiting it and any close flyby appear around it at their real
+  directions, true scale near the planet and compressed further out. Earth's system shows the
+  Moon, the tracked satellites (low orbits hugging the surface, the geostationary ring further out)
+  and the observatories at the Sun-Earth Lagrange points. Follow keeps the camera on the selected
+  body as it moves. Planet orbits are always drawn; the orbit of an asteroid, comet or spacecraft
+  appears when you hover or select it (Options can show them all). Options filter by kind, toggle
+  atmospheres, labels or the background, and switch between the compressed (logarithmic) and true
+  scale.
 - **Panels**: drag the bars between panels to resize them (double-click resets), minimise any
   panel with – and bring it back from its header or the Layout menu, reorder the map, sky and
   solar system panels with the arrows in that menu, and pick which table columns to show with

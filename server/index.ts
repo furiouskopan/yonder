@@ -41,13 +41,43 @@ app.get("/api/satellites/:set", async (req, res) => {
   }
 });
 
-app.get("/api/horizons", (_req, res) => {
-  res.json(getHorizonsTables());
+/**
+ * Version tag for a table set: changes whenever any body's data, status or the refresh state changes. Lets the
+ * browser revalidate the 1.4 MB Horizons response (or the orbit set) with a 304 instead of downloading it again,
+ * which matters when the app is shared through a tunnel.
+ */
+function tagOf(prefix: string, data: { pending: number; refreshing: boolean; bodies: { id: string; status: string; fetchedAt?: number }[] }): string {
+  let latest = 0;
+  let errors = 0;
+  for (const b of data.bodies) {
+    if ((b.fetchedAt ?? 0) > latest) latest = b.fetchedAt ?? 0;
+    if (b.status !== "ok") errors++;
+  }
+  return `W/"${prefix}-${data.bodies.length}-${latest}-${errors}-${data.pending}-${data.refreshing ? 1 : 0}"`;
+}
+
+app.get("/api/horizons", (req, res) => {
+  const data = getHorizonsTables();
+  const tag = tagOf("hz", data);
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("ETag", tag);
+  if (req.headers["if-none-match"] === tag) {
+    res.status(304).end();
+    return;
+  }
+  res.json(data);
 });
 
-app.get("/api/orbits", (_req, res) => {
-  res.setHeader("Cache-Control", "public, max-age=300");
-  res.json(getOrbits());
+app.get("/api/orbits", (req, res) => {
+  const data = getOrbits();
+  const tag = tagOf("orb", data);
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("ETag", tag);
+  if (req.headers["if-none-match"] === tag) {
+    res.status(304).end();
+    return;
+  }
+  res.json(data);
 });
 
 app.get("/api/poi", async (req, res) => {

@@ -78,9 +78,12 @@ export interface Target {
   dec?: number;
   heading?: number; // aircraft track, degrees
   speedKms?: number;
+  speedRef?: string; // what the speed is measured against ("the Sun", "Jupiter", "Earth", "the ground")
   helio?: Vec3; // heliocentric ecliptic J2000 position, AU
-  parent?: string; // moons: the body they orbit
-  rel?: Vec3; // moons: offset from the parent, ecliptic J2000, AU
+  // Bodies drawn inside a planet's local system in the solar view: its moons, plus spacecraft and close
+  // flybys while they are near it. `rel` is the geometric offset from that planet, ecliptic J2000, AU.
+  system?: string;
+  rel?: Vec3;
   mag?: number; // apparent magnitude (stars, deep-sky objects)
   approx?: boolean;
   note?: string;

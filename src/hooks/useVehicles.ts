@@ -165,6 +165,7 @@ export function useVehicles(now: number, origin: Origin, wantShips: boolean, wan
         lon,
         heading: s.heading ?? s.cog ?? undefined,
         speedKms: s.sogKn !== null ? kmh / 3600 : undefined,
+        speedRef: "the ground",
         kind: "ship",
         note: `${s.sogKn !== null ? `${s.sogKn.toFixed(1)} kn` : "speed unknown"}${s.status ? ` · ${s.status}` : ""}`,
         facts: [
@@ -208,6 +209,7 @@ export function useVehicles(now: number, origin: Origin, wantShips: boolean, wan
         lon,
         heading: t.heading ?? undefined,
         speedKms: t.speedKmh !== null ? t.speedKmh / 3600 : undefined,
+        speedRef: "the ground",
         kind: "train",
         note: `${t.speedKmh !== null ? `${Math.round(t.speedKmh)} km/h` : "speed unknown"}${t.dest ? ` · to ${t.dest}` : ""}`,
         facts: [

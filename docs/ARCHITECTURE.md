@@ -87,7 +87,11 @@ may mutate a `Target`.
    `astronomy-engine` and interpolates every Horizons body (probes, moons, dwarf planets,
    asteroids, comets, this month's near-Earth flybys) from its 48-hour vector table using cubic
    Hermite interpolation (`lib/horizons.ts`). Look angles come from the same topocentric vector.
-   The approach rate is the finite difference of distance between ticks.
+   The approach rate is the finite difference of distance between ticks. Outside its table a body
+   is extrapolated linearly only for a limited time (`MAX_OUTSIDE_MS`: an hour for moons, six for
+   close-approach asteroids, three days for the rest); beyond that it shows as out of date rather
+   than at an invented position. That matters after a restart with an old cache, when the server
+   serves expired tables while it refreshes them.
 7. **Satellites.** `useSatellites` fetches a TLE set from the server, posts it to
    `sat.worker.ts`, and every tick asks the worker to propagate all of them. The worker returns a
    `Float32Array` of seven values per satellite (range, az, el, sub-lat, sub-lon, height, speed);
@@ -112,10 +116,17 @@ may mutate a `Target`.
 10. **Selection and hover.** `selectedId` and `hoverId` live in `App` and are shared by the table,
     map, globe, sky and Solar System views, so hovering a marker highlights the row and vice versa.
     `useDescription` fetches the Wikipedia summary for the selected target through the server.
-11. **Moons.** `useSpaceTargets` gives every Horizons moon (and Earth's Moon) a `parent` and a
-    `rel` vector: its offset from the parent planet in ecliptic J2000 AU, from the moon's
-    geocentric vector minus the planet's (`A.GeoVector`, computed once per tick per planet). The
-    solar view places moons around their planet in the true direction at a compressed distance.
+11. **Planet systems.** `useSpaceTargets` gives every moon a `system` (its planet) and a `rel`
+    vector: its geometric offset from the planet centre in ecliptic J2000 AU. The planet centre comes
+    from the server's Horizons table for that planet (kind `planet`, ids 199…999, never shown as
+    targets), so moon and planet share frame, time scale and corrections exactly. Moons wait for
+    that table: astronomy-engine's outer-planet positions are off by tens to hundreds of thousands of
+    km (Charon came out 150,000 km from Pluto). Spacecraft near a planet may use the astronomy-engine
+    geometric difference meanwhile. Never use `A.GeoVector` for this: its light-time and aberration
+    corrections moved planets by 26,000 km (Mars) to 500,000 km (Pluto) relative to their moons'
+    geometric positions, putting Phobos 60° and Charon 168° away from their true directions. Spacecraft and asteroids join a planet's system while they are
+    within two Hill radii of it (Sun-Earth L1/L2 observatories, Mars orbiters, Juno, flybys within
+    about 8 lunar distances). Earth's Moon uses `A.GeoMoon` (geometric) and keeps kind `Moon`.
 
 ## Views
 
@@ -133,34 +144,57 @@ may mutate a `Target`.
   Star positions, sizes and colours are precomputed into typed arrays when the catalogue or the
   magnitude limit changes. Everything drawn is also pushed into a hit list for hover and click.
   Solar-system bodies, satellites and aircraft reuse the look angles the rest of the app computes.
-- **GlobeView** — globe.gl (three.js). Satellites, Earth places, aircraft and surface vehicles are
-  four `THREE.Points` layers drawn by a small `ShaderMaterial` (round, soft, per-point size,
-  clamped pixel size) whose position/colour/size buffers are rewritten in place each tick. The
-  buffers are allocated with spare capacity and only grow (disposing the geometry first) with
-  `setDrawRange` marking the live count. The id → index map is rebuilt only when the id list
-  changes, coordinates are computed inline (globe radius 100), the bounding sphere is fixed, and
-  picking uses a raycaster whose tolerance scales with the camera altitude. Track and footprint
-  are `pathsData` entries.
+- **GlobeView** — globe.gl (three.js). Satellites, Earth places, aircraft, surface vehicles, the
+  tracked satellite's orbit (heights from the worker) and its visibility footprint are six
+  `THREE.Points` layers drawn by one small `ShaderMaterial` (round, soft, per-point size, clamped
+  pixel size, `#include <colorspace_fragment>` so its linear colours reach the sRGB canvas
+  correctly) whose buffers are rewritten in place each tick. The buffers are allocated with spare
+  capacity and only grow (disposing the geometry first) with `setDrawRange` marking the live count.
+  The id → index map is rebuilt only when the id list changes, coordinates are computed inline
+  (globe radius 100) and the bounding sphere is fixed. globe.gl's own data layers are used only for
+  things that change when the origin moves (origin point and label): its path and ring layers
+  rebuild their objects, and recompile their shaders, on every data change. Its pointer interaction
+  is off, because it raycasts the whole globe every 50 ms whether or not the pointer moves; hover,
+  picking (occluded by the globe) and click-to-move-origin (ray-sphere intersection and
+  `toGeoCoords`) are handled here. The selection is a dot at the target's height plus a ring
+  pulsing on the ground, animated in `onBeforeRender`.
   A toolbar toggles layers, auto-rotation, the day/night texture and dot size (`prefs.globe`); a
   `webglcontextlost` listener shows a rebuild button instead of a black canvas. Rendering pauses
   while the tab is hidden. Lazy-loaded; only mounted in 3D mode.
-- **SolarSystem3D** — plain three.js with OrbitControls and CSS2D labels. Planets are textured,
-  lit `MeshStandardMaterial` spheres (Solar System Scope maps, loaded lazily and cached across
-  rebuilds) inside a tilt group and a spin group: Earth turns with the real Greenwich sidereal
-  angle, the others at their sidereal rates; Saturn carries a ring mesh with a radial UV map.
-  Worlds with air get an additive rim-glow shell; Earth's night texture is an emissive map masked
-  to the night side in `onBeforeCompile`. Each planet owns a hidden moon group that becomes
-  visible when the camera comes within 14 planet radii (checked in the render loop); moons are
-  small spheres at `rel` direction × a log-compressed distance, major ones labelled. Small-body
-  orbit lines and spacecraft trails are always built but only visible for the hovered/selected
-  body unless the option is on; `pick()` filters by visibility and scales the raycaster tolerance
-  with the camera distance. The renderer drops to pixel ratio 1 while the controls move and
-  restores full resolution 220 ms after the last change. Follow moves the camera by the selected
-  body's per-tick displacement. The
-  Sun is an emissive sphere with an additive glow sprite, the Milky Way a back-face sphere. All
-  other bodies are one `Points` cloud. The scene is (re)built only when the set of bodies, the
-  orbit data, the kind filters or the scale changes; the per-second update writes positions into
-  the existing meshes and buffers through per-body handles. Orbit shapes come from `/api/orbits`:
+- **SolarSystem3D** — plain three.js with OrbitControls and CSS2D labels. Planets (and the Sun and
+  the Moon) are textured, lit spheres oriented and spun with the IAU rotation model
+  (`A.RotationAxis`: pole RA/Dec and prime-meridian angle, turned into an ecliptic-frame quaternion
+  by `orient()`), so Earth shows the right face to the Sun and the Moon keeps its near side to
+  Earth; Saturn's rings sit in its equatorial plane. Worlds with air get an additive halo (the back
+  faces of a 1.12x shell: brightest just outside the limb, fading outward, dimmer on the night side;
+  the shader ends with `colorspace_fragment`). Earth's night texture is an emissive map masked to the
+  night side in `onBeforeCompile`. A constant-size marker point at each planet keeps it visible
+  when its sphere is tiny (True scale, or far away). In True scale bodies are drawn at 0.12 of
+  their Compressed size so the Sun and the inner planets no longer overlap.
+  Each planet has a local system drawn as an inset (`insetRadii`): true distance out to 2.3 planet
+  radii (rings, low orbits, Phobos), then 1.2 display radii per decade, so LEO hugs the surface,
+  GEO sits at 2.85, the Moon at 4 and Sun-Earth L2 at 4.7 Earth radii, in their real directions.
+  One system is shown at a time: the selected body's when the camera is within 16 display radii of
+  it, otherwise the nearest (Saturn and Neptune line up on the compressed scale in 2026, so
+  "nearest" alone picked the wrong one). It shows the moons (one `InstancedMesh` per planet; Earth's
+  Moon its own textured sphere) and, for Earth, the tracked artificial satellites as a point cloud
+  (computed only while shown). Spacecraft and flybys inside a system, and any body whose main-scale
+  position would fall inside a planet's sphere (in the log scale Earth's sphere covers ±0.1 AU
+  radially, Jupiter's more than an AU), are drawn in that planet's inset and stay visible from
+  afar; their heliocentric lines are hidden. Bodies inside the Sun's sphere (Parker near perihelion)
+  get the same treatment around the Sun. All materials, including the hidden systems', are compiled
+  right after a rebuild so nothing compiles mid-zoom. Small-body orbit lines and spacecraft trails
+  live in their own group and effect, so new orbit data rebuilds only them; they are visible for
+  the hovered or selected body unless the option is on. `pick()` filters by visibility (three.js
+  raycasts invisible objects too) and scales its tolerance with the camera distance. The pixel ratio
+  is fixed: switching it during interaction resizes the canvas and stalled every zoom gesture.
+  Follow moves the camera by the selected body's per-tick displacement and switches off when the
+  selection changes. The selection ring is a camera-facing quad whose shader draws a ring about
+  2 px wide, never smaller than 10 px across. The Milky Way is a back-face sphere. The scene is
+  (re)built only when the set of bodies, the kind filters or the scale changes; the per-second
+  update writes positions and orientations into the existing objects through per-body handles
+  (`positionAll`), which also runs at the end of every rebuild so nothing is ever drawn at the
+  origin. `?debug` exposes the scene as `window.__solar` for headless checks. Orbit shapes come from `/api/orbits`:
   conic paths from osculating elements for small bodies, sampled trajectories for spacecraft, and
   locally sampled orbits for the planets (resampled hourly). Orbit lines are pickable: hovering
   one names its body and brightens it, clicking selects. `prefs.solar` holds the kind filters,
@@ -185,7 +219,7 @@ upstream:
 | --- | --- | --- | --- |
 | `celestrak.ts` | `/api/satellites/sets`, `/api/satellites/:set` | `data/cache/celestrak-<group>.json` | 6 h; stale copy served on failure |
 | `satcat.ts` | (used by celestrak) | `satcat.json` | 7 d |
-| `horizons.ts` | `/api/horizons` | `horizons-<id>.json`, `horizons-moons.json`, `cneos-cad.json` | 48 h tables refreshed when <12 h remain; lists 12 h; 2-wide pool |
+| `horizons.ts` | `/api/horizons` | `horizons-<id>.json`, `horizons-moons.json`, `cneos-cad.json` | 48 h tables refreshed when <12 h remain; lists 12 h; 2-wide pool; planet centres, flybys and moons refresh first |
 | `orbits.ts` | `/api/orbits` | `orbit-<id>.json` | 30 d (7 d for flybys); one at a time, never while tables refresh |
 | `poi.ts` | `/api/poi?lat&lon` | `poi-<cell>.json` | 7 d per 0.02° cell |
 | `aircraft.ts` | `/api/aircraft?lat&lon&nm` | in memory | 8 s |
